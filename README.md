@@ -16,20 +16,18 @@ Built with Webpack into a single UMD script:
 dist/velocity-webex-calling.js
 ```
 
-Once GitHub Pages is enabled for this repo (Settings → Pages → Source:
-GitHub Actions), pushes to `main` build and publish this file via
-`.github/workflows/deploy.yml`. The published bundle URL will be:
+GitHub Pages is enabled (Settings → Pages → Source: GitHub Actions); pushes to
+`main` build and publish this file via `.github/workflows/deploy.yml`. The
+published bundle URL (live, HTTP 200, `application/javascript`) is:
 
 ```
-https://<github-org-or-user>.github.io/velocity-webex-calling-widget/velocity-webex-calling.js
+https://epeterson-blueally.github.io/velocity-webex-calling-widget/velocity-webex-calling.js
 ```
-
-_(placeholder — fill in once Pages is enabled and the first deploy completes)_
 
 ## Usage
 
 ```html
-<script src="https://YOUR-HTTPS-HOST/velocity-webex-calling.js"></script>
+<script src="https://epeterson-blueally.github.io/velocity-webex-calling-widget/velocity-webex-calling.js"></script>
 <velocity-webex-calling
   access-token="..."
   agent-id="..."

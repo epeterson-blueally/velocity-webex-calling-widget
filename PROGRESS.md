@@ -12,8 +12,8 @@ Restart protocol: new Claude Code session in this repo → kickoff prompt + "Res
 | Phase | Name | Model/Effort | Gate | Status |
 |---|---|---|---|---|
 | 0 | Discovery & verification | Sonnet · high | yes | DONE — probe run; AUTH DECISION PENDING (see gate log) |
-| 1 | Scaffold, CI, Pages | Sonnet · low | yes | DONE (subagent + verified) — AWAITING ERIK GATE |
-| 2 | Auth module | Opus · medium | maybe | not started |
+| 1 | Scaffold, CI, Pages | Sonnet · low | yes | DONE — Pages LIVE, gate cleared |
+| 2 | Auth module | Opus · medium | yes (self-OAuth) | IN PROGRESS (subagent) |
 | 3 | Calling core | Opus · high | yes | not started |
 | 4 | Transfers (blind + consult) | Opus · high | no | not started |
 | 5 | WxCC desktop-state integration | Opus · medium | yes | not started |
@@ -73,6 +73,11 @@ Restart protocol: new Claude Code session in this repo → kickoff prompt + "Res
     (3) proceed to Phase 1 now. Control Hub §7 a–d still OPEN, continue in parallel; §7a (RTMS) and
     §7b (Calling license/line) needed before the Phase 3 live smoke test.
 - 2026-08-22 **Gate 0 RESOLVED** for the purpose of advancing: auth = self-OAuth; Phase 1 authorized.
+- 2026-08-22 **Gate 1 CLEARED:** repo pushed to github.com/epeterson-blueally/velocity-webex-calling-widget
+  (public), Pages enabled (Actions source). First run failed at deploy (Pages not yet enabled —
+  expected race); re-ran → success. Live bundle: HTTP 200, application/javascript, 4066 bytes at
+  `https://epeterson-blueally.github.io/velocity-webex-calling-widget/velocity-webex-calling.js`.
+  CI note: GH runners warn actions/*@v4 target Node 20 (deprecated, forced to Node 24) — cosmetic, not failing.
 - 2026-08-22 (Phase 1): Scaffold built. Stack: TypeScript 5.9.3 + Webpack 5 (UMD single file) + vitest 4.
   `dist/velocity-webex-calling.js` = 3.97 KiB. Plain `HTMLElement` + Shadow DOM (no Lit) — smaller,
   runtime-dependency-free. Webpack `resolve.fallback` + `ProvidePlugin(process)` pre-wired with the full
