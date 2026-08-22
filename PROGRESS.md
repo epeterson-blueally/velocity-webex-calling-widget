@@ -14,7 +14,7 @@ Restart protocol: new Claude Code session in this repo → kickoff prompt + "Res
 | 0 | Discovery & verification | Sonnet · high | yes | DONE — probe run; AUTH DECISION PENDING (see gate log) |
 | 1 | Scaffold, CI, Pages | Sonnet · low | yes | DONE — Pages LIVE, gate cleared |
 | 2 | Auth module | Opus · medium | yes (self-OAuth) | DONE (built + defect fixed + verified) — AWAITING ERIK GATE |
-| 3 | Calling core | Opus · high | yes | not started |
+| 3 | Calling core | Opus · high | yes | IN PROGRESS (subagent, mock-tested; live gate later) |
 | 4 | Transfers (blind + consult) | Opus · high | no | not started |
 | 5 | WxCC desktop-state integration | Opus · medium | yes | not started |
 | 6 | UI & dial pad | Sonnet · medium | no | not started |
@@ -94,6 +94,9 @@ Restart protocol: new Claude Code session in this repo → kickoff prompt + "Res
     help if unlicensed). Agent uses the Cisco Call line in Teams per handoff, so licensed is likely.
   - Consequence (from Phase 0 PKCE finding): self-OAuth REQUIRES a small serverless token-exchange
     backend holding the client_secret — pure browser OAuth is impossible on Webex. Backend host TBD.
+  - 2026-08-22 **Backend host decided:** pilot = **Cloudflare Workers** (cheap, personal/non-corporate,
+    one-command deploy). Production later = Azure Functions (contract is host-agnostic, so Azure is a
+    re-impl of the same /token + /refresh, no widget change). Orchestrator to write the Worker.
   - Erik decisions (2026-08-22): (1) self-OAuth CONFIRMED; (2) backend host = **decide at Phase 2**
     (Phase 2 to design host-agnostic /authorize,/token,/refresh interface, host chosen before impl);
     (3) proceed to Phase 1 now. Control Hub §7 a–d still OPEN, continue in parallel; §7a (RTMS) and

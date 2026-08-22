@@ -1,0 +1,16 @@
+# Cloudflare Worker — Velocity Webex Calling OAuth token-exchange backend.
+# Deploy: see README.md. Secrets are NOT stored here (use `wrangler secret put`).
+name = "velocity-webex-auth"
+main = "src/worker.js"
+compatibility_date = "2026-08-01"
+
+# Public, non-secret config. Fill these in for your deployment.
+# ALLOWED_ORIGIN must be the exact origin the widget bundle is served from
+# (the GitHub Pages origin) so CORS is scoped, not wildcard.
+[vars]
+ALLOWED_ORIGIN = "https://epeterson-blueally.github.io"
+REDIRECT_URI = "https://epeterson-blueally.github.io/velocity-webex-calling-widget/oauth-callback.html"
+
+# Secrets (DO NOT put here — set with wrangler, see README):
+#   wrangler secret put WEBEX_CLIENT_ID
+#   wrangler secret put WEBEX_CLIENT_SECRET
