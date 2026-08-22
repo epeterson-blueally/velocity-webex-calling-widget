@@ -88,7 +88,14 @@ export class OAuthTokenProvider extends BaseTokenProvider implements TokenProvid
   private readonly authBaseUrl: string;
   private readonly scopes: readonly string[];
   private readonly win: Window;
-  private readonly fetchImpl: typeof fetch;
+  /**
+   * The fetch used for the /token and /refresh exchanges. May be `undefined` when
+   * neither an injected `fetchImpl` nor a global `fetch` exists (e.g. a non-browser
+   * host, or jsdom without a fetch polyfill). Construction must NOT throw in that
+   * case — instead getToken/refresh/signIn reject with a clear error when they
+   * actually need the network. See `requireFetch()`.
+   */
+  private readonly fetchImpl: typeof fetch | undefined;
 
   // In-memory token material. NEVER persisted.
   private accessToken: string | null = null;
@@ -110,7 +117,14 @@ export class OAuthTokenProvider extends BaseTokenProvider implements TokenProvid
     this.authBaseUrl = options.authBaseUrl.replace(/\/+$/, '');
     this.scopes = options.scopes ?? WEBEX_CALLING_SCOPES;
     this.win = options.windowRef ?? (globalThis as unknown as { window: Window }).window;
-    this.fetchImpl = options.fetchImpl ?? globalThis.fetch.bind(globalThis);
+    // GUARD: do NOT call globalThis.fetch.bind() unconditionally — that throws a
+    // TypeError at construction if fetch is absent. Target browsers (Chromium)
+    // always have fetch, so this only matters for non-browser/jsdom hosts, but the
+    // element's connectedCallback must never throw. Defer the "no fetch" failure to
+    // the point of use (requireFetch), where it becomes a clean rejection.
+    this.fetchImpl =
+      options.fetchImpl ??
+      (typeof globalThis.fetch === 'function' ? globalThis.fetch.bind(globalThis) : undefined);
 
     let origin = '';
     try {
@@ -283,8 +297,24 @@ export class OAuthTokenProvider extends BaseTokenProvider implements TokenProvid
     return url.toString();
   }
 
+  /**
+   * Return the fetch to use, or throw a clear error if none is available. Called at
+   * the point of network use so that a missing fetch surfaces as a rejected
+   * getToken/refresh/signIn rather than a construction-time throw.
+   */
+  private requireFetch(): typeof fetch {
+    if (!this.fetchImpl) {
+      throw new Error(
+        'No fetch implementation is available; cannot reach the token backend. ' +
+          'Run in a browser (or provide fetchImpl) to sign in.',
+      );
+    }
+    return this.fetchImpl;
+  }
+
   private async exchangeCode(code: string, codeVerifier: string): Promise<void> {
-    const res = await this.fetchImpl(`${this.authBaseUrl}/token`, {
+    const fetchImpl = this.requireFetch();
+    const res = await fetchImpl(`${this.authBaseUrl}/token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ code, code_verifier: codeVerifier, redirect_uri: this.redirectUri }),
@@ -297,6 +327,14 @@ export class OAuthTokenProvider extends BaseTokenProvider implements TokenProvid
   }
 
   private async doRefresh(): Promise<string> {
+    // No fetch → no retry can help. Fail fast with a clear message and drop tokens.
+    if (!this.fetchImpl) {
+      this.refreshToken = null;
+      this.accessToken = null;
+      this.expiresAt = null;
+      this.setStatus('error', 'No network client available; cannot refresh the token.');
+      throw new Error('No fetch implementation is available; cannot refresh the token.');
+    }
     let lastErr: Error | null = null;
     for (let attempt = 1; attempt <= MAX_REFRESH_ATTEMPTS; attempt++) {
       try {

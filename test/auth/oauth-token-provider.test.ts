@@ -308,6 +308,32 @@ describe('OAuthTokenProvider', () => {
     p.dispose();
   });
 
+  it('does NOT throw at construction when no fetch is available (GAP 2 guard)', async () => {
+    // Simulate a host with no global fetch and no injected fetchImpl. The old code
+    // did globalThis.fetch.bind() unconditionally -> TypeError in connectedCallback.
+    const env = makeEnv();
+    const hadFetch = 'fetch' in globalThis;
+    const saved = (globalThis as { fetch?: typeof fetch }).fetch;
+    delete (globalThis as { fetch?: typeof fetch }).fetch;
+    try {
+      let p: OAuthTokenProvider | null = null;
+      expect(() => {
+        p = new OAuthTokenProvider({
+          clientId: 'cid',
+          redirectUri: REDIRECT,
+          authBaseUrl: AUTH_BASE,
+          windowRef: env.win,
+          // no fetchImpl on purpose
+        });
+      }).not.toThrow();
+      // Behaviour without a token is still clean (no fetch needed for this path).
+      await expect(p!.getToken()).rejects.toThrow(/Sign-in required/);
+      p!.dispose();
+    } finally {
+      if (hadFetch) (globalThis as { fetch?: typeof fetch }).fetch = saved;
+    }
+  });
+
   it('getToken refreshes when the current token is within the expiry skew window', async () => {
     const env = makeEnv();
     const fetchMock = vi

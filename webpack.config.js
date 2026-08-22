@@ -13,6 +13,7 @@
 // automatically.
 const path = require('path');
 const webpack = require('webpack');
+const CopyPlugin = require('copy-webpack-plugin');
 
 module.exports = (env, argv) => {
   const isProd = (argv && argv.mode) === 'production';
@@ -69,6 +70,17 @@ module.exports = (env, argv) => {
       new webpack.ProvidePlugin({
         process: 'process/browser',
         Buffer: ['buffer', 'Buffer'],
+      }),
+      // Publish the static support pages alongside the bundle. output.clean wipes
+      // dist/ each build, so these MUST be emitted by webpack (not pre-copied):
+      //  - oauth-callback.html: the registered OAuth redirect target (Phase 2).
+      //  - live-test.html: a Pages-hosted page that runs the real widget with the
+      //    calling SDK loaded from CDN, for the live smoke test (no desktop needed).
+      new CopyPlugin({
+        patterns: [
+          { from: path.resolve(__dirname, 'public/oauth-callback.html'), to: 'oauth-callback.html' },
+          { from: path.resolve(__dirname, 'public/live-test.html'), to: 'live-test.html' },
+        ],
       }),
     ],
   };

@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<!--
+  live-test.html — Pages-hosted live smoke test for the REAL widget.
+
+  Runs the actual <velocity-webex-calling> element (from ./velocity-webex-calling.js)
+  with the Webex calling SDK loaded from the CDN UMD (so globalThis.Calling exists —
+  the self-contained monolith bundling is deferred to Phase 7; the CDN is used here
+  ONLY for this hosted test page). Because this page is served from the SAME origin
+  as oauth-callback.html, the OAuth popup's postMessage bridge works.
+
+  Use: open this page on GitHub Pages, paste the Webex Integration Client ID and the
+  Cloudflare Worker base URL, click Apply, then click "Sign in to Webex Calling" in
+  the widget. That yields a real calling-scoped token and lets you register the line,
+  dial, hold/resume, mute, send DTMF, and transfer — the Phase 3 + 4 live smoke test,
+  no Agent Desktop required.
+
+  NOTE: @wxcc-desktop/sdk is NOT present here, so the desktop-state integration
+  no-ops (present=false). The idle-code set/restore path is validated only inside the
+  real Agent Desktop, not on this page.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex" />
+  <title>Velocity Webex Calling — live test</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+           max-width: 720px; margin: 1.5rem auto; padding: 0 1rem; color: #1a1a1a; }
+    fieldset { border: 1px solid #ccc; border-radius: 8px; margin-bottom: 1rem; }
+    label { display: block; font-size: 0.85rem; font-weight: 600; margin: 0.5rem 0 0.15rem; }
+    input[type=text] { width: 100%; box-sizing: border-box; padding: 6px 8px; font-family: ui-monospace, Menlo, monospace; }
+    button { padding: 8px 14px; font-size: 0.9rem; cursor: pointer; }
+    .row { display: flex; gap: 1rem; align-items: center; flex-wrap: wrap; }
+    .note { font-size: 0.8rem; color: #666; }
+    #host { margin-top: 1rem; }
+  </style>
+</head>
+<body>
+  <h2>Velocity Webex Calling — live smoke test</h2>
+  <p class="note">Paste the values from the Phase 2 gate, click <b>Apply</b>, then sign in inside the widget.</p>
+
+  <fieldset>
+    <legend>Configuration</legend>
+    <label for="clientId">Webex Integration Client ID</label>
+    <input id="clientId" type="text" placeholder="C-xxxxxxxx…" autocomplete="off" />
+
+    <label for="authBaseUrl">Auth backend base URL (Cloudflare Worker)</label>
+    <input id="authBaseUrl" type="text" placeholder="https://velocity-webex-auth.YOUR-SUBDOMAIN.workers.dev" autocomplete="off" />
+
+    <label for="redirectUri">Redirect URI (must match the Integration's registered value)</label>
+    <input id="redirectUri" type="text" autocomplete="off" />
+
+    <div class="row" style="margin-top:0.75rem">
+      <button id="apply">Apply / (re)load widget</button>
+      <label class="row" style="font-weight:400"><input id="dark" type="checkbox" /> dark mode</label>
+    </div>
+    <p class="note" id="status"></p>
+  </fieldset>
+
+  <div id="host"></div>
+
+  <!-- Calling SDK from CDN (provides globalThis.Calling for src/calling/bootstrap.ts). -->
+  <script src="https://unpkg.com/webex@3.12.0/umd/calling.min.js"></script>
+  <!-- The real widget bundle, served from this same Pages directory. -->
+  <script src="./velocity-webex-calling.js"></script>
+  <script>
+    (function () {
+      var host = document.getElementById('host');
+      var statusEl = document.getElementById('status');
+      var redirectDefault = window.location.origin + '/velocity-webex-calling-widget/oauth-callback.html';
+      document.getElementById('redirectUri').value = redirectDefault;
+
+      if (!window.Calling) {
+        statusEl.textContent = 'WARNING: the Webex calling SDK (CDN) did not load — check network/CSP.';
+      }
+
+      document.getElementById('apply').onclick = function () {
+        var clientId = document.getElementById('clientId').value.trim();
+        var authBaseUrl = document.getElementById('authBaseUrl').value.trim().replace(/\/+$/, '');
+        var redirectUri = document.getElementById('redirectUri').value.trim();
+        var dark = document.getElementById('dark').checked;
+        if (!clientId || !authBaseUrl) {
+          statusEl.textContent = 'Enter both the Client ID and the Worker base URL first.';
+          return;
+        }
+        // Recreate the element fresh each Apply so config changes take effect cleanly.
+        host.textContent = '';
+        var el = document.createElement('velocity-webex-calling');
+        el.setAttribute('client-id', clientId);
+        el.setAttribute('auth-base-url', authBaseUrl);
+        el.setAttribute('redirect-uri', redirectUri);
+        if (dark) el.setAttribute('dark-mode', 'true');
+        host.appendChild(el);
+        statusEl.textContent = 'Widget loaded. Click "Sign in to Webex Calling" inside it.';
+      };
+    })();
+  </script>
+</body>
+</html>

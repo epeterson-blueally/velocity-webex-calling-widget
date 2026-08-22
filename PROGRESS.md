@@ -123,14 +123,25 @@ Restart protocol: new Claude Code session in this repo → kickoff prompt + "Res
   reported but NOT threaded into SDK capture — MicStreamFactory is `{audio:boolean}` only. Speaker
   (setSinkId) works. Fix with the pre-Phase-7 calling change (widen MicStreamFactory to pass
   {audio:{deviceId}}). Matters for the two-WebRTC-engine echo/device acceptance criterion.
-- **TRACKED GAP 2 (robustness, minor):** element connectedCallback → createTokenProvider →
-  new OAuthTokenProvider throws if `globalThis.fetch` is absent (constructor does fetch.bind). Target
-  browsers (Chromium) always have fetch, so not a target bug, but provider construction should be inside
-  the init try/catch to degrade to an error state. Flag for Phase 8 LENS C / harden in pre-Phase-7 pass.
-- **PRE-PHASE-7 orchestrator task list (make it load for real):** (a) bundle the `webex` monolith so
-  bootstrap no longer needs a CDN `Calling` global (self-contained single script); (b) copy
-  public/oauth-callback.html into the Pages deploy output; (c) fix GAP 1 (mic deviceId); (d) optionally
-  GAP 2. Then the widget can init in the real desktop.
+- **TRACKED GAP 2 — FIXED (pre-Phase-7):** OAuthTokenProvider no longer binds globalThis.fetch at
+  construction (guards for its absence; requireFetch()/doRefresh reject cleanly at point of use); the
+  element's connectedCallback wraps provider construction in try/catch → visible error state, never
+  throws. Unit test added (315 tests).
+- **PRE-PHASE-7 orchestrator task list:** (a) bundle the `webex` monolith so bootstrap no longer needs
+  a CDN `Calling` global (self-contained single script) — STILL DEFERRED to Phase 7 (only needed for the
+  real in-desktop load; the live-test page uses CDN); (b) copy public/oauth-callback.html into the Pages
+  deploy — DONE (copy-webpack-plugin emits it + live-test.html into dist/); (c) GAP 1 mic deviceId —
+  STILL DEFERRED (SDK mic-constraint shape is live-verifiable; not needed for the smoke test; the failed
+  subagent's partial mic edit was reverted); (d) GAP 2 fetch guard — DONE.
+- 2026-08-22 **Enablement DONE (bridging Phase 6→7):** copy-webpack-plugin@14.0.0 wires the build to emit
+  `dist/oauth-callback.html` + `dist/live-test.html`. `public/live-test.html` = Pages-hosted page that
+  runs the REAL widget (calling SDK from CDN, bundle via ./relative) with Client ID + Worker URL inputs →
+  the Phase 3+4 live smoke test with no desktop needed. Fetch-guard hardened. tsc/lint clean, 315 tests,
+  build emits all three files. NOTE: the failed pre-live subagent (session limit) left partial edits;
+  kept its complete fetch-guard, reverted its broken mic edit, finished the rest here.
+- **⚠️ DEPLOY STATE:** origin/Pages is still serving the Phase-1 placeholder — commits phase-2..6 +
+  enablement are LOCAL ONLY (Erik chose manual git). Erik must `git push origin main` to deploy the real
+  widget + callback + live-test page before the live smoke test.
 
 ## Open questions / pending gate answers
 

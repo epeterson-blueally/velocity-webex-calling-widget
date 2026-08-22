@@ -38,7 +38,7 @@
  */
 
 import { OAuthTokenProvider, StoreTokenProvider } from './auth';
-import type { TokenProvider } from './auth';
+import type { AuthState, TokenProvider } from './auth';
 import { DesktopStateManager, WxccDesktopBackend } from './desktop';
 import { CallingWidgetView, WIDGET_STYLES } from './ui';
 import type { UiActions, WidgetStatus } from './ui';
@@ -139,7 +139,18 @@ export class VelocityWebexCallingElement extends HTMLElement {
     }
     this.started = true;
 
-    this.tokenProvider = this.createTokenProvider();
+    // DEGRADE, NEVER THROW: constructing the token provider must not throw out of a
+    // lifecycle callback. If it does (e.g. a host with no global fetch — though the
+    // OAuth provider now guards that internally), surface a visible error state
+    // instead of letting connectedCallback throw.
+    try {
+      this.tokenProvider = this.createTokenProvider();
+    } catch (err) {
+      this.tokenProvider = null;
+      this.callingInitError = `Sign-in unavailable: ${errMsg(err)}`;
+      this.render();
+      return;
+    }
     this.unsubs.push(
       this.tokenProvider.onStatusChange(() => {
         this.render();
@@ -284,9 +295,14 @@ export class VelocityWebexCallingElement extends HTMLElement {
   }
 
   private render(): void {
-    if (!this.view || !this.tokenProvider || !this.actions) return;
+    if (!this.view || !this.actions) return;
+    // Tolerate a null tokenProvider (construction failed): synthesize an error auth
+    // state so the widget still renders a message instead of blanking out.
+    const auth: AuthState = this.tokenProvider
+      ? this.tokenProvider.getStatus()
+      : { status: 'error', detail: this.callingInitError ?? 'Sign-in is unavailable.' };
     const status: WidgetStatus = {
-      auth: this.tokenProvider.getStatus(),
+      auth,
       calling: this.controller?.getStatus() ?? null,
       desktop: this.desktopManager?.getStatus() ?? null,
       callingInitError: this.callingInitError,
