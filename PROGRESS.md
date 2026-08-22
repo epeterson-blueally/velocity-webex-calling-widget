@@ -17,7 +17,7 @@ Restart protocol: new Claude Code session in this repo → kickoff prompt + "Res
 | 3 | Calling core | Opus · high | yes | CODE DONE + verified; LIVE GATE pending (blocked on Gate 2) |
 | 4 | Transfers (blind + consult) | Opus · high | no | DONE + verified (265 tests) |
 | 5 | WxCC desktop-state integration | Opus · medium | yes | DONE + verified (288 tests) — idle-code gate open |
-| 6 | UI & dial pad | Sonnet · medium | no | not started |
+| 6 | UI & dial pad | Sonnet · medium | no | DONE + verified (314 tests) |
 | 7 | Deploy, layout JSON, test runbook | Sonnet · low | yes | not started |
 | 8 | Adversarial code review | Opus · high | yes | not started |
 
@@ -109,6 +109,28 @@ Restart protocol: new Claude Code session in this repo → kickoff prompt + "Res
   element registers, present=false. Real correction to DISCOVERY: `Desktop.config.init` REQUIRES a
   config arg ({widgetName,widgetProvider}), not the bare init() DISCOVERY assumed.
 - Verified: tsc clean, lint clean, **288/288 tests**, build ok. Bundle now 2.9 MiB.
+
+## Phase 6 summary + tracked gaps (orchestrator)
+
+- src/ui (13 files) — pure views rendering from WidgetStatus, calling only UiActions (verified: no
+  @webex/calling / @wxcc-desktop/sdk imports in src/ui; no external font/CDN). src/index.ts rewritten:
+  element wires TokenProvider (OAuth default when client-id+redirect-uri+auth-base-url present; Store
+  fallback) → CallingController → DesktopStateManager → CallingWidgetView. Deferred eager import() of
+  ./calling keeps src/index static graph SDK-free. Ring tone = WebAudio (gesture-armed), device ids in
+  localStorage only (token-safe, test-verified). Verified: tsc/lint clean, **314/314 tests**, single-file
+  bundle 2.92 MiB. Render check (jsdom+fetch stub): sign-in gate renders, dark-mode applies.
+- **TRACKED GAP 1 (functional, fix before Phase 7):** mic DEVICE selection is enumerated/persisted/
+  reported but NOT threaded into SDK capture — MicStreamFactory is `{audio:boolean}` only. Speaker
+  (setSinkId) works. Fix with the pre-Phase-7 calling change (widen MicStreamFactory to pass
+  {audio:{deviceId}}). Matters for the two-WebRTC-engine echo/device acceptance criterion.
+- **TRACKED GAP 2 (robustness, minor):** element connectedCallback → createTokenProvider →
+  new OAuthTokenProvider throws if `globalThis.fetch` is absent (constructor does fetch.bind). Target
+  browsers (Chromium) always have fetch, so not a target bug, but provider construction should be inside
+  the init try/catch to degrade to an error state. Flag for Phase 8 LENS C / harden in pre-Phase-7 pass.
+- **PRE-PHASE-7 orchestrator task list (make it load for real):** (a) bundle the `webex` monolith so
+  bootstrap no longer needs a CDN `Calling` global (self-contained single script); (b) copy
+  public/oauth-callback.html into the Pages deploy output; (c) fix GAP 1 (mic deviceId); (d) optionally
+  GAP 2. Then the widget can init in the real desktop.
 
 ## Open questions / pending gate answers
 
