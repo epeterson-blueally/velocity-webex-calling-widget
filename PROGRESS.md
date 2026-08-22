@@ -12,7 +12,7 @@ Restart protocol: new Claude Code session in this repo → kickoff prompt + "Res
 | Phase | Name | Model/Effort | Gate | Status |
 |---|---|---|---|---|
 | 0 | Discovery & verification | Sonnet · high | yes | DONE — probe run; AUTH DECISION PENDING (see gate log) |
-| 1 | Scaffold, CI, Pages | Sonnet · low | yes | not started |
+| 1 | Scaffold, CI, Pages | Sonnet · low | yes | IN PROGRESS (subagent) |
 | 2 | Auth module | Opus · medium | maybe | not started |
 | 3 | Calling core | Opus · high | yes | not started |
 | 4 | Transfers (blind + consult) | Opus · high | no | not started |
@@ -68,5 +68,8 @@ Restart protocol: new Claude Code session in this repo → kickoff prompt + "Res
     help if unlicensed). Agent uses the Cisco Call line in Teams per handoff, so licensed is likely.
   - Consequence (from Phase 0 PKCE finding): self-OAuth REQUIRES a small serverless token-exchange
     backend holding the client_secret — pure browser OAuth is impossible on Webex. Backend host TBD.
-  - PENDING Erik decisions: (1) confirm self-OAuth direction, (2) serverless backend host,
-    (3) Control Hub §7 a–d checks.
+  - Erik decisions (2026-08-22): (1) self-OAuth CONFIRMED; (2) backend host = **decide at Phase 2**
+    (Phase 2 to design host-agnostic /authorize,/token,/refresh interface, host chosen before impl);
+    (3) proceed to Phase 1 now. Control Hub §7 a–d still OPEN, continue in parallel; §7a (RTMS) and
+    §7b (Calling license/line) needed before the Phase 3 live smoke test.
+- 2026-08-22 **Gate 0 RESOLVED** for the purpose of advancing: auth = self-OAuth; Phase 1 authorized.
