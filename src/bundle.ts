@@ -51,3 +51,24 @@ export type { CallSnapshot, CallState, CallEvent, CallInfo, CallerId } from './s
 // Auth seam (the controller subscribes to a TokenProvider).
 export { StoreTokenProvider, OAuthTokenProvider } from './auth';
 export type { TokenProvider, AuthState } from './auth';
+
+// WxCC desktop-state integration (Phase 5). DesktopStateManager subscribes to the
+// CallingController's status stream; WxccDesktopBackend is the only importer of
+// @wxcc-desktop/sdk — importing it here is what pulls that SDK into the bundle.
+export {
+  DesktopStateManager,
+  WxccDesktopBackend,
+  IDLE_CODE_NAME,
+  CONTROL_HUB_IDLE_CODE_PATH,
+} from './desktop';
+export type {
+  DesktopBackend,
+  DesktopStatus,
+  DesktopStateManagerOptions,
+  CallStatusSource,
+  IdleCode,
+  AgentStateSnapshot,
+  AgentStateTarget,
+  AcdInteraction,
+  WxccDesktopBackendOptions,
+} from './desktop';

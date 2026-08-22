@@ -16,7 +16,7 @@ Restart protocol: new Claude Code session in this repo → kickoff prompt + "Res
 | 2 | Auth module | Opus · medium | yes (self-OAuth) | DONE (built + defect fixed + verified) — AWAITING ERIK GATE |
 | 3 | Calling core | Opus · high | yes | CODE DONE + verified; LIVE GATE pending (blocked on Gate 2) |
 | 4 | Transfers (blind + consult) | Opus · high | no | DONE + verified (265 tests) |
-| 5 | WxCC desktop-state integration | Opus · medium | yes | not started |
+| 5 | WxCC desktop-state integration | Opus · medium | yes | DONE + verified (288 tests) — idle-code gate open |
 | 6 | UI & dial pad | Sonnet · medium | no | not started |
 | 7 | Deploy, layout JSON, test runbook | Sonnet · low | yes | not started |
 | 8 | Adversarial code review | Opus · high | yes | not started |
@@ -95,6 +95,20 @@ Restart protocol: new Claude Code session in this repo → kickoff prompt + "Res
   → held primary; (c) PRIMARY hangs up mid-consult → consult leg PROMOTED to foreground (agent keeps
   talking to the target), lastError names the dead leg. Verified: tsc clean, lint clean, **265/265
   tests** (+40), build ok. SDK stays behind CallingBackend; FSM SDK-free. Harness has transfer controls.
+
+## Phase 5 summary (orchestrator)
+
+- src/desktop as a decoupled FSM SUBSCRIBER (design rule 2 — verified: no @webex/calling in src/desktop,
+  no @wxcc-desktop/sdk in src/calling). DesktopStateManager: on connected→capture state + set Idle(NCC
+  id resolved by name); on ended→restore ONLY if state still exactly matches what we set (else log,
+  don't clobber). ACD interaction offered mid-personal-call → banner, no auto-answer (module has no
+  answer capability by construction = RONA-safe). @wxcc-desktop/sdk@3.0.1 pinned.
+- IMPORTANT detail: @wxcc-desktop/sdk throws at IMPORT time outside the desktop (reads global
+  AGENTX_SERVICE). So it's NEVER statically imported — guarded by `'AGENTX_SERVICE' in globalThis`, then
+  eager dynamic `import()`. Orchestrator verified via jsdom: built bundle loads with NO throw standalone,
+  element registers, present=false. Real correction to DISCOVERY: `Desktop.config.init` REQUIRES a
+  config arg ({widgetName,widgetProvider}), not the bare init() DISCOVERY assumed.
+- Verified: tsc clean, lint clean, **288/288 tests**, build ok. Bundle now 2.9 MiB.
 
 ## Open questions / pending gate answers
 

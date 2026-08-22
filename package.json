@@ -35,6 +35,7 @@
     "webpack-cli": "7.2.2"
   },
   "dependencies": {
-    "@webex/calling": "3.12.0"
+    "@webex/calling": "3.12.0",
+    "@wxcc-desktop/sdk": "3.0.1"
   }
 }
