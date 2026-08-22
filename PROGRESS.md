@@ -12,7 +12,7 @@ Restart protocol: new Claude Code session in this repo → kickoff prompt + "Res
 | Phase | Name | Model/Effort | Gate | Status |
 |---|---|---|---|---|
 | 0 | Discovery & verification | Sonnet · high | yes | DONE — probe run; AUTH DECISION PENDING (see gate log) |
-| 1 | Scaffold, CI, Pages | Sonnet · low | yes | IN PROGRESS (subagent) |
+| 1 | Scaffold, CI, Pages | Sonnet · low | yes | DONE (subagent + verified) — AWAITING ERIK GATE |
 | 2 | Auth module | Opus · medium | maybe | not started |
 | 3 | Calling core | Opus · high | yes | not started |
 | 4 | Transfers (blind + consult) | Opus · high | no | not started |
@@ -73,3 +73,15 @@ Restart protocol: new Claude Code session in this repo → kickoff prompt + "Res
     (3) proceed to Phase 1 now. Control Hub §7 a–d still OPEN, continue in parallel; §7a (RTMS) and
     §7b (Calling license/line) needed before the Phase 3 live smoke test.
 - 2026-08-22 **Gate 0 RESOLVED** for the purpose of advancing: auth = self-OAuth; Phase 1 authorized.
+- 2026-08-22 (Phase 1): Scaffold built. Stack: TypeScript 5.9.3 + Webpack 5 (UMD single file) + vitest 4.
+  `dist/velocity-webex-calling.js` = 3.97 KiB. Plain `HTMLElement` + Shadow DOM (no Lit) — smaller,
+  runtime-dependency-free. Webpack `resolve.fallback` + `ProvidePlugin(process)` pre-wired with the full
+  DISCOVERY §5 Node-polyfill list so Phase 3 can import @webex/calling with zero build rework.
+  `@webex/calling`/`@wxcc-desktop/sdk` NOT installed yet (Phase 3/5). `.npmrc save-exact=true`; lockfile present.
+  Placeholder card echoes access-token (masked, first/last 4), decoded JWT **scope claim** (Gate-0 addition —
+  gives an exact in-desktop scope reading), agent-id, org-id, dark-mode. `textContent` only (no innerHTML).
+  `.github/workflows/deploy.yml`: push→main builds+tests+deploys dist/ to Pages.
+  **Orchestrator verification:** `npm run build` ✓, `npm test` 3/3 ✓, YAML valid, no secrets, and an
+  independent headless-jsdom load of the BUILT bundle confirmed element registration + masked token
+  (no raw-token leak) + scope decode. Note: files outside the project folder render as static snapshots
+  in the Browser pane (scripts don't run) — use jsdom/vitest for automated checks, not the pane.
