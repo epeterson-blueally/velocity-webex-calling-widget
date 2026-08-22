@@ -1,42 +1,94 @@
 <!DOCTYPE html>
-<!-- Pastes an access token, inits @webex/calling, tries line registration.
-     Tells you whether $STORE.auth.accessToken carries calling scopes. -->
+<!-- Webex Calling token probe.
+     Pastes an access token, decodes its scopes, then inits @webex/calling 3.12.0,
+     waits for the calling client, and attempts LINE registration.
+     Answers: does $STORE.auth.accessToken carry the scopes needed to register a
+     Webex Calling line? The scope decode alone is usually decisive
+     (look for spark:webrtc_calling). Line registration is the definitive test. -->
 <html>
 <head><meta charset="utf-8"><title>Webex Calling Token Probe</title></head>
-<body style="font-family:sans-serif;max-width:640px;margin:2rem auto">
+<body style="font-family:sans-serif;max-width:680px;margin:2rem auto">
 <h3>Webex Calling token probe</h3>
+<p style="color:#555">Paste a desktop <code>$STORE.auth.accessToken</code> (a JWT starting with <code>eyJ</code>). Nothing is sent anywhere except Cisco's own calling servers.</p>
 <textarea id="tok" rows="3" style="width:100%" placeholder="Paste access token"></textarea>
-<button id="go">Register</button>
-<pre id="log" style="background:#eee;padding:1em;white-space:pre-wrap"></pre>
+<button id="go">Decode scopes + register line</button>
+<pre id="log" style="background:#eee;padding:1em;white-space:pre-wrap;word-break:break-all"></pre>
 <script src="https://unpkg.com/webex@3.12.0/umd/calling.min.js"></script>
 <script>
-const log = (m) => { document.getElementById('log').textContent += m + "\n"; console.log(m); };
+const REQUIRED = ['spark:calls_read','spark:calls_write','spark:xsi','spark:webrtc_calling'];
+const logEl = document.getElementById('log');
+const log = (m) => { logEl.textContent += m + "\n"; console.log(m); };
+
+// Best-effort JWT scope decode. Webex tokens are opaque-ish JWTs; the scope claim
+// is not guaranteed to be present/readable, so treat "no scopes decoded" as
+// inconclusive, NOT as failure — the line-registration step is authoritative.
+function decodeScopes(tok) {
+  try {
+    const parts = tok.split('.');
+    if (parts.length < 2) return null;
+    const b = parts[1].replace(/-/g,'+').replace(/_/g,'/');
+    const json = JSON.parse(decodeURIComponent(escape(atob(b + '==='.slice((b.length+3)%4)))));
+    return json.scope || json.scopes || json.scp || null;
+  } catch (e) { return null; }
+}
+
+function reportScopes(tok) {
+  const scope = decodeScopes(tok);
+  if (!scope) { log('Scopes: could not decode from JWT (token may be opaque) — relying on line registration below.'); return; }
+  const list = Array.isArray(scope) ? scope : String(scope).split(/[\s,]+/).filter(Boolean);
+  log('Scopes in token (' + list.length + '):');
+  log('  ' + list.join('\n  '));
+  const missing = REQUIRED.filter(s => !list.includes(s));
+  if (missing.length === 0) log('>> All required calling scopes present. GOOD sign for $STORE passthrough.');
+  else log('>> MISSING required scope(s): ' + missing.join(', ') + '  → likely need self-OAuth.');
+}
+
+const wait = (ms) => new Promise(r => setTimeout(r, ms));
 
 document.getElementById('go').onclick = async () => {
+  logEl.textContent = '';
   const access_token = document.getElementById('tok').value.trim();
   if (!access_token) return log('Paste a token first.');
-  log('Initializing Calling with pasted token...');
+
+  log('--- Step 1: decode token scopes ---');
+  reportScopes(access_token);
+
+  log('\n--- Step 2: init @webex/calling 3.12.0 and register the line ---');
   try {
     const webexConfig = { config: { logger: { level: 'debug' } }, credentials: { access_token } };
     const callingConfig = {
-      clientConfig: { calling: true, contact: true, callHistory: true, callSettings: true, voicemail: true },
+      clientConfig: { calling: true, contact: false, callHistory: false, callSettings: false, voicemail: false },
       callingClientConfig: { logger: { level: 'info' } },
       logger: { level: 'info' },
     };
     const calling = await Calling.init({ webexConfig, callingConfig });
-    calling.on('ready', () => {
-      log('Calling ready. Registering client...');
-      calling.register().then(() => {
-        const callingClient = calling.callingClient;
-        const line = Object.values(callingClient.getLines())[0];
-        line.on('registered', (info) => log('SUCCESS: line registered. ' + JSON.stringify(info)));
-        line.on('unregistered', (e) => log('Line unregistered: ' + JSON.stringify(e)));
-        log('Calling line.register()...');
-        line.register();
-      }).catch((e) => log('FAIL calling.register(): ' + (e && e.message ? e.message : JSON.stringify(e))));
+    log('Calling.init() ok. Waiting for webex ready + calling client...');
+
+    let readyFired = false;
+    calling.on('ready', async () => {
+      if (readyFired) return; readyFired = true;
+      log('webex "ready" event fired. Calling wrapper.register()...');
+      try { await calling.register(); log('wrapper.register() resolved (device + mercury registered — token is valid).'); }
+      catch (e) { return log('FAIL wrapper.register(): ' + (e && e.message || JSON.stringify(e))); }
+
+      // callingClient is created async on ready; poll for it (up to ~15s).
+      let cc = null;
+      for (let i = 0; i < 30; i++) { cc = calling.callingClient; if (cc) break; await wait(500); }
+      if (!cc) return log('TIMEOUT: calling.callingClient never materialized (client init failed — often a calling-scope/entitlement issue).');
+      log('callingClient ready.');
+
+      const lines = cc.getLines ? cc.getLines() : null;
+      const line = lines && Object.values(lines)[0];
+      if (!line) return log('No line found on this account (getLines() empty) — check the agent has a Webex Calling line assigned (Control Hub §7b).');
+
+      line.on('registered', (info) => log('SUCCESS: line REGISTERED. ' + (info ? JSON.stringify(info) : '')));
+      line.on('unregistered', (e) => log('line unregistered: ' + JSON.stringify(e)));
+      line.on('error', (e) => log('LINE ERROR: ' + (e && e.message || JSON.stringify(e))));
+      log('Calling line.register()...');
+      try { line.register(); } catch (e) { log('FAIL line.register(): ' + (e && e.message || JSON.stringify(e))); }
     });
   } catch (e) {
-    log('FAIL Calling.init(): ' + (e && e.message ? e.message : JSON.stringify(e)));
+    log('FAIL Calling.init(): ' + (e && e.message || JSON.stringify(e)));
   }
 };
 </script>
