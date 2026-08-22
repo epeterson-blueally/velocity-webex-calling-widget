@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<!-- Pastes an access token, inits @webex/calling, tries line registration.
+     Tells you whether $STORE.auth.accessToken carries calling scopes. -->
+<html>
+<head><meta charset="utf-8"><title>Webex Calling Token Probe</title></head>
+<body style="font-family:sans-serif;max-width:640px;margin:2rem auto">
+<h3>Webex Calling token probe</h3>
+<textarea id="tok" rows="3" style="width:100%" placeholder="Paste access token"></textarea>
+<button id="go">Register</button>
+<pre id="log" style="background:#eee;padding:1em;white-space:pre-wrap"></pre>
+<script src="https://unpkg.com/webex@3.12.0/umd/calling.min.js"></script>
+<script>
+const log = (m) => { document.getElementById('log').textContent += m + "\n"; console.log(m); };
+
+document.getElementById('go').onclick = async () => {
+  const access_token = document.getElementById('tok').value.trim();
+  if (!access_token) return log('Paste a token first.');
+  log('Initializing Calling with pasted token...');
+  try {
+    const webexConfig = { config: { logger: { level: 'debug' } }, credentials: { access_token } };
+    const callingConfig = {
+      clientConfig: { calling: true, contact: true, callHistory: true, callSettings: true, voicemail: true },
+      callingClientConfig: { logger: { level: 'info' } },
+      logger: { level: 'info' },
+    };
+    const calling = await Calling.init({ webexConfig, callingConfig });
+    calling.on('ready', () => {
+      log('Calling ready. Registering client...');
+      calling.register().then(() => {
+        const callingClient = calling.callingClient;
+        const line = Object.values(callingClient.getLines())[0];
+        line.on('registered', (info) => log('SUCCESS: line registered. ' + JSON.stringify(info)));
+        line.on('unregistered', (e) => log('Line unregistered: ' + JSON.stringify(e)));
+        log('Calling line.register()...');
+        line.register();
+      }).catch((e) => log('FAIL calling.register(): ' + (e && e.message ? e.message : JSON.stringify(e))));
+    });
+  } catch (e) {
+    log('FAIL Calling.init(): ' + (e && e.message ? e.message : JSON.stringify(e)));
+  }
+};
+</script>
+</body>
+</html>

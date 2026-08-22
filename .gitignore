@@ -5,5 +5,7 @@ dist/
 .env
 .env.*
 coverage/
-# cloned Cisco samples live under /reference; keep our extracted notes, ignore heavy clones' git
-reference/**/.git/
+# cloned Cisco samples live under /reference (~249M); NOT committed per BUILD-PLAN §1
+# ("git-ignored or submodule-less copies"). The durable extracted patterns live in DISCOVERY.md.
+# Clones remain on disk for later phases' subagents to read.
+reference/
