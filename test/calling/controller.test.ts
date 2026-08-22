@@ -316,6 +316,238 @@ describe('CallingController — second inbound', () => {
   });
 });
 
+describe('CallingController — blind transfer', () => {
+  async function connected() {
+    const { controller, backend } = makeController();
+    track(controller);
+    await controller.start();
+    await controller.dial('+1');
+    const call = [...backend.calls.values()][0];
+    backend.emitCall({ type: 'ESTABLISHED', callId: call.id });
+    return { controller, backend, call };
+  }
+
+  it('blindTransfer from connected calls the SDK; the SDK disconnect ends the call', async () => {
+    const { controller, backend, call } = await connected();
+    await controller.blindTransfer('+15559999');
+    expect(call.blindTransfer).toHaveBeenCalledWith('+15559999');
+    expect(controller.getCallSnapshot().state).toBe('connected'); // ends on the event
+    backend.emitCall({ type: 'DISCONNECT', callId: call.id, reason: 'Call transferred.' });
+    expect(controller.getCallSnapshot().state).toBe('ended');
+  });
+
+  it('blindTransfer works from held', async () => {
+    const { controller, backend, call } = await connected();
+    await controller.hold();
+    backend.emitCall({ type: 'HELD', callId: call.id });
+    expect(controller.getCallSnapshot().state).toBe('held');
+    await controller.blindTransfer('+15559999');
+    expect(call.blindTransfer).toHaveBeenCalledWith('+15559999');
+  });
+
+  it('an empty destination is rejected with an action error, no SDK call', async () => {
+    const { controller, call } = await connected();
+    await controller.blindTransfer('   ');
+    expect(call.blindTransfer).not.toHaveBeenCalled();
+    expect(controller.getStatus().lastActionError).toMatch(/destination/i);
+  });
+
+  it('a blindTransfer rejection surfaces TRANSFER_ERROR and keeps the call up', async () => {
+    const { controller, call } = await connected();
+    call.blindTransfer.mockRejectedValueOnce(new Error('sip 404'));
+    await controller.blindTransfer('+1');
+    await flush();
+    const snap = controller.getCallSnapshot();
+    expect(snap.state).toBe('connected');
+    expect(snap.lastError?.kind).toBe('transfer');
+    expect(snap.lastError?.message).toMatch(/sip 404/i);
+  });
+
+  it('blindTransfer is a no-op when there is no active call', async () => {
+    const { controller } = makeController();
+    track(controller);
+    await controller.start();
+    await controller.blindTransfer('+1');
+    expect(controller.getCallSnapshot().state).toBe('idle');
+  });
+});
+
+describe('CallingController — consult transfer', () => {
+  /** Get a controller with a connected primary; returns helpers to drive the consult. */
+  async function withPrimary() {
+    const { controller, backend } = makeController();
+    track(controller);
+    await controller.start();
+    await controller.dial('+15550000'); // primary
+    const primary = [...backend.calls.values()][0] as MockCall;
+    backend.emitCall({ type: 'ESTABLISHED', callId: primary.id });
+    return { controller, backend, primary };
+  }
+
+  /** Start a consult and return the created consult-leg MockCall. */
+  async function startConsult(controller: CallingController, backend: MockBackend, primary: MockCall) {
+    await controller.startConsult('+15551111');
+    await flush();
+    const consult = [...backend.calls.values()].find((c) => c !== primary) as MockCall;
+    return consult;
+  }
+
+  it('startConsult holds the primary, creates + dials the consult leg, enters consulting', async () => {
+    const { controller, backend, primary } = await withPrimary();
+    const consult = await startConsult(controller, backend, primary);
+    expect(primary.hold).toHaveBeenCalledTimes(1);
+    expect(consult.dial).toHaveBeenCalledTimes(1);
+    const snap = controller.getCallSnapshot();
+    expect(snap.state).toBe('consulting');
+    expect(snap.consult?.primary.callId).toBe(primary.id);
+    expect(snap.consult?.consult.callId).toBe(consult.id);
+  });
+
+  it('an empty consult destination is rejected with an action error', async () => {
+    const { controller } = await withPrimary();
+    await controller.startConsult('');
+    expect(controller.getCallSnapshot().state).toBe('connected');
+    expect(controller.getStatus().lastActionError).toMatch(/destination/i);
+  });
+
+  it('completeConsult (JOIN) joins the legs on the primary and ends → ended', async () => {
+    const { controller, backend, primary } = await withPrimary();
+    const consult = await startConsult(controller, backend, primary);
+    backend.emitCall({ type: 'ESTABLISHED', callId: consult.id }); // talk
+    await controller.completeConsult();
+    await flush();
+    expect(primary.consultTransfer).toHaveBeenCalledWith(consult.id);
+    const snap = controller.getCallSnapshot();
+    expect(snap.state).toBe('ended');
+    expect(snap.endReason).toBe('Transferred.');
+  });
+
+  it('cancelConsult (RESUME PRIMARY) ends the consult leg and resumes the primary', async () => {
+    const { controller, backend, primary } = await withPrimary();
+    const consult = await startConsult(controller, backend, primary);
+    backend.emitCall({ type: 'ESTABLISHED', callId: consult.id });
+    await controller.cancelConsult();
+    await flush();
+    expect(consult.end).toHaveBeenCalledTimes(1);
+    expect(primary.resume).toHaveBeenCalledTimes(1);
+    // CONSULT_CANCELLED → held(primary); primary.resume() → RESUMED → connected.
+    backend.emitCall({ type: 'RESUMED', callId: primary.id });
+    const snap = controller.getCallSnapshot();
+    expect(snap.state).toBe('connected');
+    expect(snap.call?.callId).toBe(primary.id);
+  });
+
+  // --- FAILURE (a): consult leg fails/errors on dial ---
+  it('(a) a consult leg that errors on dial falls back to the held primary + surfaces error', async () => {
+    const { controller, backend, primary } = await withPrimary();
+    // Next makeCall returns a call whose dial rejects.
+    backend.makeCallImpl = () => {
+      const bad = new MockCall('consult-bad', 'outbound');
+      bad.dial.mockRejectedValueOnce(new Error('media negotiation failed'));
+      backend.calls.set('consult-bad', bad);
+      return Promise.resolve(bad);
+    };
+    await controller.startConsult('+15551111');
+    await flush();
+    const snap = controller.getCallSnapshot();
+    expect(snap.state).toBe('held'); // fell back to the held primary
+    expect(snap.call?.callId).toBe(primary.id);
+    expect(snap.consult).toBeNull();
+    expect(snap.lastError?.kind).toBe('setup');
+  });
+
+  it('(a-variant) makeCall failing to create the consult leg leaves the primary connected', async () => {
+    const { controller, backend, primary } = await withPrimary();
+    backend.makeCallImpl = () => Promise.reject(new Error('no second line'));
+    await controller.startConsult('+15551111');
+    await flush();
+    const snap = controller.getCallSnapshot();
+    expect(snap.state).toBe('connected'); // never entered consulting
+    expect(snap.call?.callId).toBe(primary.id);
+    expect(primary.hold).not.toHaveBeenCalled(); // primary untouched
+    expect(controller.getStatus().lastActionError).toMatch(/consult call/i);
+  });
+
+  it('(a-variant) a hold failure discards the consult leg and stays connected', async () => {
+    const { controller, backend, primary } = await withPrimary();
+    primary.hold.mockRejectedValueOnce(new Error('hold refused'));
+    const consult = await startConsult(controller, backend, primary);
+    const snap = controller.getCallSnapshot();
+    expect(snap.state).toBe('connected');
+    expect(snap.lastError?.kind).toBe('hold');
+    expect(consult.end).toHaveBeenCalledTimes(1); // the created leg was discarded
+    expect(consult.dial).not.toHaveBeenCalled();
+  });
+
+  // --- FAILURE (b): consult target declines / never answers ---
+  it('(b) the consult target declining (leg DISCONNECT) returns to the held primary', async () => {
+    const { controller, backend, primary } = await withPrimary();
+    const consult = await startConsult(controller, backend, primary);
+    backend.emitCall({ type: 'CONNECT', callId: consult.id }); // ringing
+    backend.emitCall({ type: 'DISCONNECT', callId: consult.id, reason: 'User Busy.' });
+    const snap = controller.getCallSnapshot();
+    expect(snap.state).toBe('held');
+    expect(snap.call?.callId).toBe(primary.id);
+    expect(snap.consult).toBeNull();
+  });
+
+  // --- FAILURE (c): primary's far end hangs up mid-consult ---
+  it('(c) the PRIMARY far end hanging up mid-consult promotes the consult leg to foreground', async () => {
+    const { controller, backend, primary } = await withPrimary();
+    const consult = await startConsult(controller, backend, primary);
+    backend.emitCall({ type: 'ESTABLISHED', callId: consult.id }); // talking to consultee
+    backend.emitCall({ type: 'DISCONNECT', callId: primary.id, reason: 'Remote Hangup.' });
+    const snap = controller.getCallSnapshot();
+    expect(snap.state).toBe('connected');
+    expect(snap.call?.callId).toBe(consult.id); // agent keeps talking to the target
+    expect(snap.consult).toBeNull();
+    expect(snap.lastError?.kind).toBe('transfer');
+    expect(snap.lastError?.message).toMatch(/original caller hung up/i);
+    // The now-foreground consult call can then be ended normally.
+    await controller.end();
+    expect(consult.end).toHaveBeenCalledTimes(1);
+  });
+
+  it('DISCONNECT on the consult leg vs the primary leg are handled distinctly', async () => {
+    // leg disconnect → back to primary (held); primary disconnect → promote leg.
+    {
+      const { controller, backend, primary } = await withPrimary();
+      const consult = await startConsult(controller, backend, primary);
+      backend.emitCall({ type: 'ESTABLISHED', callId: consult.id });
+      backend.emitCall({ type: 'DISCONNECT', callId: consult.id });
+      expect(controller.getCallSnapshot().call?.callId).toBe(primary.id);
+    }
+    {
+      const { controller, backend, primary } = await withPrimary();
+      const consult = await startConsult(controller, backend, primary);
+      backend.emitCall({ type: 'ESTABLISHED', callId: consult.id });
+      backend.emitCall({ type: 'DISCONNECT', callId: primary.id });
+      expect(controller.getCallSnapshot().call?.callId).toBe(consult.id);
+    }
+  });
+
+  it('a completeConsult rejection stays in consulting and surfaces the error', async () => {
+    const { controller, backend, primary } = await withPrimary();
+    const consult = await startConsult(controller, backend, primary);
+    backend.emitCall({ type: 'ESTABLISHED', callId: consult.id });
+    primary.consultTransfer.mockRejectedValueOnce(new Error('transfer rejected'));
+    await controller.completeConsult();
+    await flush();
+    const snap = controller.getCallSnapshot();
+    expect(snap.state).toBe('consulting');
+    expect(snap.lastError?.kind).toBe('transfer');
+    expect(snap.lastError?.message).toMatch(/transfer rejected/i);
+  });
+
+  it('completeConsult / cancelConsult are no-ops when not consulting', async () => {
+    const { controller, primary } = await withPrimary();
+    await controller.completeConsult();
+    await controller.cancelConsult();
+    expect(primary.consultTransfer).not.toHaveBeenCalled();
+    expect(controller.getCallSnapshot().state).toBe('connected');
+  });
+});
+
 describe('CallingController — status subscription + dispose', () => {
   it('onChange fires on registration and call changes', async () => {
     const { controller, backend } = makeController();

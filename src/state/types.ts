@@ -28,6 +28,7 @@ export type CallState =
   | 'connecting' // answered / connect received, awaiting established
   | 'connected' // established, media flowing
   | 'held' // an established call put on hold
+  | 'consulting' // consult-transfer sub-state: primary held, consult leg live (Phase 4)
   | 'ended'; // terminal
 
 export type CallDirection = 'inbound' | 'outbound';
@@ -51,7 +52,7 @@ export interface CallErrorInfo {
     | 'resume' // doHoldResume (→resumed) failed
     | 'call' // generic in-call error from the SDK
     | 'busy' // remote busy / rejected
-    | 'transfer'; // reserved for Phase 4
+    | 'transfer'; // blind/consult transfer failed, or a leg died mid-consult
   message: string;
   /** Optional numeric SDK code (CALL_ERROR_CODE) for diagnostics. */
   code?: number;
@@ -67,6 +68,26 @@ export interface CallInfo {
   connectedAt: number | null;
   /** true once the remote-media track has arrived (audio should be flowing). */
   hasRemoteMedia: boolean;
+}
+
+/** The consult leg's own lifecycle sub-phase while a consult transfer is in flight. */
+export type ConsultPhase = 'dialing' | 'connecting' | 'connected';
+
+/**
+ * The consult-transfer sub-state's data — owns BOTH call objects at once
+ * (BUILD-PLAN.md Phase 4). It is a dedicated slot rather than an overload of
+ * heldCall/pendingInbound: those model the "answer a second inbound" flow, whose
+ * semantics (a fully independent second call the agent may resume) differ from a
+ * consult (two legs bound together, destined to be joined or torn down as a unit).
+ * Keeping them separate means neither reducer has to disambiguate the other's calls.
+ */
+export interface ConsultInfo {
+  /** The original ("primary") call. It is held for the entire consult. */
+  primary: CallInfo;
+  /** The consultation call placed to the transfer target. */
+  consult: CallInfo;
+  /** Sub-phase of the CONSULT LEG (the primary is always held while consulting). */
+  phase: ConsultPhase;
 }
 
 /**
@@ -87,6 +108,12 @@ export interface CallSnapshot {
    * offers "answer (and hold current)" or "decline". Null when none pending.
    */
   pendingInbound: CallInfo | null;
+  /**
+   * The in-flight consult transfer (primary + consult leg), or null when not
+   * consulting. Non-null exactly when `state === 'consulting'`; while it is set,
+   * `call`/`heldCall`/`pendingInbound` are null (the two calls live here instead).
+   */
+  consult: ConsultInfo | null;
   /** The most recent non-fatal error (hold/resume failures leave the call up). */
   lastError: CallErrorInfo | null;
   /** Why the last call ended, when known (e.g. "Normal Disconnect.", "User Busy."). */
@@ -111,6 +138,14 @@ export type CallEvent =
   | { type: 'ANSWER_STARTED'; callId: string }
   | { type: 'ANSWER_SECOND_STARTED'; callId: string }
   | { type: 'MUTE_CHANGED'; callId: string; muted: boolean }
+  // --- transfer intent events (controller-originated, Phase 4) ---
+  // CONSULT_STARTED: `callId` is the primary (currently active) call; `consultCallId`
+  // is the freshly-created consult leg. Fired after the primary is held + the consult
+  // call is created. CONSULT_COMPLETED/CANCELLED name the primary. Blind transfer
+  // needs no intent event — it simply ends the active call via DISCONNECT.
+  | { type: 'CONSULT_STARTED'; callId: string; consultCallId: string; consultCallerId?: CallerId }
+  | { type: 'CONSULT_COMPLETED'; callId: string }
+  | { type: 'CONSULT_CANCELLED'; callId: string }
   // --- backend / SDK call events ---
   | { type: 'INCOMING'; callId: string; callerId?: CallerId }
   | { type: 'PROGRESS'; callId: string }
@@ -124,7 +159,9 @@ export type CallEvent =
   | { type: 'DISCONNECT'; callId: string; reason?: string }
   | { type: 'CALL_ERROR'; callId: string; error: CallErrorInfo }
   | { type: 'HOLD_ERROR'; callId: string; error: CallErrorInfo }
-  | { type: 'RESUME_ERROR'; callId: string; error: CallErrorInfo };
+  | { type: 'RESUME_ERROR'; callId: string; error: CallErrorInfo }
+  /** A transfer (blind or consult-complete) failed. `callId` is the transferor. */
+  | { type: 'TRANSFER_ERROR'; callId: string; error: CallErrorInfo };
 
 export type CallEventType = CallEvent['type'];
 

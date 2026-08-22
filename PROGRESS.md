@@ -15,7 +15,7 @@ Restart protocol: new Claude Code session in this repo → kickoff prompt + "Res
 | 1 | Scaffold, CI, Pages | Sonnet · low | yes | DONE — Pages LIVE, gate cleared |
 | 2 | Auth module | Opus · medium | yes (self-OAuth) | DONE (built + defect fixed + verified) — AWAITING ERIK GATE |
 | 3 | Calling core | Opus · high | yes | CODE DONE + verified; LIVE GATE pending (blocked on Gate 2) |
-| 4 | Transfers (blind + consult) | Opus · high | no | not started |
+| 4 | Transfers (blind + consult) | Opus · high | no | DONE + verified (265 tests) |
 | 5 | WxCC desktop-state integration | Opus · medium | yes | not started |
 | 6 | UI & dial pad | Sonnet · medium | no | not started |
 | 7 | Deploy, layout JSON, test runbook | Sonnet · low | yes | not started |
@@ -85,6 +85,16 @@ Restart protocol: new Claude Code session in this repo → kickoff prompt + "Res
   live); (2) token-refresh mid-call — controller re-registers on token change, but the webex core is
   built once by bootstrap with the initial token; mid-call refresh reinit path is unproven live;
   (3) two-WebRTC-engine echo / audio device selection (human-verified in harness, Phase 6 adds picker).
+
+## Phase 4 summary (orchestrator)
+
+- Transfers added. Explicit `'consulting'` FSM state with a dedicated `consult:{primary,consult,phase}`
+  slot owning BOTH legs (NOT overloading heldCall/pendingInbound — those model the independent
+  answer-second-inbound call). Controller: blindTransfer/startConsult/completeConsult/cancelConsult.
+  Failure handling verified: (a) consult-leg dial error → held primary; (b) target declines/disconnect
+  → held primary; (c) PRIMARY hangs up mid-consult → consult leg PROMOTED to foreground (agent keeps
+  talking to the target), lastError names the dead leg. Verified: tsc clean, lint clean, **265/265
+  tests** (+40), build ok. SDK stays behind CallingBackend; FSM SDK-free. Harness has transfer controls.
 
 ## Open questions / pending gate answers
 

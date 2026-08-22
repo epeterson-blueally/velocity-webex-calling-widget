@@ -112,8 +112,11 @@ describe('CallFsm — every event in every state (state transition matrix)', () 
     'ended',
   ];
 
-  // event factory keyed by a label, plus the expected resulting state per source state.
-  type Case = { event: CallEvent; expect: Record<CallState, CallState> };
+  // event factory keyed by a label, plus the expected resulting state per source
+  // state. `consulting` is intentionally omitted (it is a self-contained sub-machine
+  // with its own dedicated describe-block below), so the map is partial over the base
+  // states the matrix drives via at().
+  type Case = { event: CallEvent; expect: Partial<Record<CallState, CallState>> };
 
   const table: Record<string, Case> = {
     DIAL_STARTED: {
@@ -390,6 +393,219 @@ describe('CallFsm — second inbound (answer-and-hold / decline)', () => {
     expect(dialing.send({ type: 'INCOMING', callId: C2 }).pendingInbound).toBeNull();
     const ringing = at('ringing_in');
     expect(ringing.send({ type: 'INCOMING', callId: C2 }).pendingInbound).toBeNull();
+  });
+});
+
+describe('CallFsm — consult transfer sub-state', () => {
+  const T = 'consult-leg';
+
+  /** Drive an FSM to `consulting`: C1 connected → consult leg T dialing. */
+  function consulting(now = () => 4000): CallFsm {
+    const fsm = new CallFsm(now);
+    fsm.send({ type: 'DIAL_STARTED', callId: C1 });
+    fsm.send({ type: 'ESTABLISHED', callId: C1 });
+    fsm.send({ type: 'CONSULT_STARTED', callId: C1, consultCallId: T, consultCallerId: { num: '+1444' } });
+    return fsm;
+  }
+
+  it('CONSULT_STARTED from connected enters consulting, owning BOTH legs', () => {
+    const fsm = consulting();
+    const s = fsm.getSnapshot();
+    expect(s.state).toBe('consulting');
+    expect(s.call).toBeNull();
+    expect(s.heldCall).toBeNull();
+    expect(s.consult?.primary.callId).toBe(C1);
+    expect(s.consult?.consult.callId).toBe(T);
+    expect(s.consult?.consult.callerId?.num).toBe('+1444');
+    expect(s.consult?.phase).toBe('dialing');
+  });
+
+  it('CONSULT_STARTED is also accepted from held (hold-event race safe)', () => {
+    const fsm = at('held');
+    const s = fsm.send({ type: 'CONSULT_STARTED', callId: C1, consultCallId: T });
+    expect(s.state).toBe('consulting');
+    expect(s.consult?.primary.callId).toBe(C1);
+  });
+
+  it('CONSULT_STARTED is ignored when not on a connected/held primary, or wrong callId', () => {
+    const dialing = at('dialing');
+    expect(dialing.send({ type: 'CONSULT_STARTED', callId: C1, consultCallId: T }).state).toBe('dialing');
+    const conn = at('connected');
+    // wrong primary id → ignored
+    const before = conn.getSnapshot();
+    expect(conn.send({ type: 'CONSULT_STARTED', callId: 'other', consultCallId: T })).toBe(before);
+  });
+
+  it('consult leg progresses dialing → connecting → connected (records connectedAt)', () => {
+    const fsm = consulting(() => 8888);
+    expect(fsm.send({ type: 'PROGRESS', callId: T }).consult?.phase).toBe('dialing');
+    expect(fsm.send({ type: 'CONNECT', callId: T }).consult?.phase).toBe('connecting');
+    const est = fsm.send({ type: 'ESTABLISHED', callId: T });
+    expect(est.consult?.phase).toBe('connected');
+    expect(est.consult?.consult.connectedAt).toBe(8888);
+  });
+
+  it('consult leg REMOTE_MEDIA, CALLER_ID and MUTE_CHANGED update only the leg', () => {
+    const fsm = consulting();
+    expect(fsm.send({ type: 'REMOTE_MEDIA', callId: T }).consult?.consult.hasRemoteMedia).toBe(true);
+    expect(fsm.send({ type: 'CALLER_ID', callId: T, callerId: { name: 'Consultee' } }).consult?.consult.callerId?.name).toBe('Consultee');
+    expect(fsm.send({ type: 'MUTE_CHANGED', callId: T, muted: true }).consult?.consult.muted).toBe(true);
+    // The primary was not touched.
+    expect(fsm.getSnapshot().consult?.primary.muted).toBe(false);
+  });
+
+  it('CALLER_ID for the primary updates only the primary', () => {
+    const fsm = consulting();
+    const s = fsm.send({ type: 'CALLER_ID', callId: C1, callerId: { name: 'Original' } });
+    expect(s.consult?.primary.callerId?.name).toBe('Original');
+    expect(s.consult?.consult.callerId?.name).toBeUndefined();
+  });
+
+  it('an unknown callId is ignored while consulting', () => {
+    const fsm = consulting();
+    const before = fsm.getSnapshot();
+    expect(fsm.send({ type: 'ESTABLISHED', callId: 'nobody' })).toBe(before);
+  });
+
+  it("primary's HELD/RESUMED confirmations while consulting are no-ops", () => {
+    const fsm = consulting();
+    const before = fsm.getSnapshot();
+    expect(fsm.send({ type: 'HELD', callId: C1 })).toBe(before);
+    expect(fsm.send({ type: 'RESUMED', callId: C1 })).toBe(before);
+  });
+
+  // --- COMPLETE (join) ---
+  it('CONSULT_COMPLETED joins the calls → ended, preserving the primary + reason', () => {
+    const fsm = consulting();
+    fsm.send({ type: 'ESTABLISHED', callId: T });
+    const s = fsm.send({ type: 'CONSULT_COMPLETED', callId: C1 });
+    expect(s.state).toBe('ended');
+    expect(s.call?.callId).toBe(C1);
+    expect(s.endReason).toBe('Transferred.');
+    expect(s.consult).toBeNull();
+  });
+
+  it('after CONSULT_COMPLETED, late DISCONNECTs for either leg are terminal no-ops', () => {
+    const fsm = consulting();
+    fsm.send({ type: 'ESTABLISHED', callId: T });
+    const ended = fsm.send({ type: 'CONSULT_COMPLETED', callId: C1 });
+    expect(fsm.send({ type: 'DISCONNECT', callId: T })).toBe(ended);
+    expect(fsm.send({ type: 'DISCONNECT', callId: C1 })).toBe(ended);
+  });
+
+  // --- CANCEL (resume primary) ---
+  it('CONSULT_CANCELLED returns the primary to the foreground as held', () => {
+    const fsm = consulting();
+    fsm.send({ type: 'ESTABLISHED', callId: T });
+    const s = fsm.send({ type: 'CONSULT_CANCELLED', callId: C1 });
+    expect(s.state).toBe('held');
+    expect(s.call?.callId).toBe(C1);
+    expect(s.consult).toBeNull();
+    // The controller then resumes: RESUMED lands on the now-foreground primary.
+    expect(fsm.send({ type: 'RESUMED', callId: C1 }).state).toBe('connected');
+  });
+
+  // --- FAILURE (a): consult leg errors on dial ---
+  it('(a) CALL_ERROR on the consult leg falls back to the held primary, surfacing the error', () => {
+    const fsm = consulting();
+    const s = fsm.send({ type: 'CALL_ERROR', callId: T, error: err('setup') });
+    expect(s.state).toBe('held');
+    expect(s.call?.callId).toBe(C1);
+    expect(s.consult).toBeNull();
+    expect(s.lastError?.kind).toBe('setup');
+  });
+
+  // --- FAILURE (b): consult target declines / never answers ---
+  it('(b) DISCONNECT on the consult leg (target declined) falls back to the held primary', () => {
+    const fsm = consulting();
+    fsm.send({ type: 'CONNECT', callId: T }); // ringing, target then declines
+    const s = fsm.send({ type: 'DISCONNECT', callId: T });
+    expect(s.state).toBe('held');
+    expect(s.call?.callId).toBe(C1);
+    expect(s.consult).toBeNull();
+  });
+
+  it('(b) a declined consult while the leg was still dialing also falls back to held', () => {
+    const fsm = consulting();
+    const s = fsm.send({ type: 'DISCONNECT', callId: T });
+    expect(s.state).toBe('held');
+    expect(s.call?.callId).toBe(C1);
+  });
+
+  // --- FAILURE (c): primary's far end hangs up mid-consult ---
+  it('(c) DISCONNECT on the PRIMARY promotes the connected consult leg to the foreground', () => {
+    const fsm = consulting();
+    fsm.send({ type: 'ESTABLISHED', callId: T }); // consult leg connected
+    const s = fsm.send({ type: 'DISCONNECT', callId: C1 }); // original caller hangs up
+    expect(s.state).toBe('connected');
+    expect(s.call?.callId).toBe(T);
+    expect(s.consult).toBeNull();
+    expect(s.lastError?.kind).toBe('transfer');
+    expect(s.lastError?.message).toMatch(/original caller hung up/i);
+  });
+
+  it('(c) primary hangup while the consult leg is still dialing promotes it in dialing', () => {
+    const fsm = consulting();
+    const s = fsm.send({ type: 'DISCONNECT', callId: C1 });
+    expect(s.state).toBe('dialing');
+    expect(s.call?.callId).toBe(T);
+  });
+
+  it('(c) primary hangup while the consult leg is connecting promotes it in connecting', () => {
+    const fsm = consulting();
+    fsm.send({ type: 'CONNECT', callId: T });
+    const s = fsm.send({ type: 'DISCONNECT', callId: C1 });
+    expect(s.state).toBe('connecting');
+    expect(s.call?.callId).toBe(T);
+  });
+
+  it('(c) CALL_ERROR on the primary also promotes the consult leg, surfacing that error', () => {
+    const fsm = consulting();
+    fsm.send({ type: 'ESTABLISHED', callId: T });
+    const s = fsm.send({ type: 'CALL_ERROR', callId: C1, error: err('call') });
+    expect(s.state).toBe('connected');
+    expect(s.call?.callId).toBe(T);
+    expect(s.lastError?.kind).toBe('call');
+  });
+
+  // --- TRANSFER_ERROR keeps the consult alive ---
+  it('TRANSFER_ERROR while consulting stays in consulting and surfaces the error', () => {
+    const fsm = consulting();
+    fsm.send({ type: 'ESTABLISHED', callId: T });
+    const s = fsm.send({ type: 'TRANSFER_ERROR', callId: C1, error: err('transfer') });
+    expect(s.state).toBe('consulting');
+    expect(s.consult?.consult.callId).toBe(T);
+    expect(s.lastError?.kind).toBe('transfer');
+  });
+
+  it('after a promoted consult leg, the promoted call ends normally → ended', () => {
+    const fsm = consulting();
+    fsm.send({ type: 'ESTABLISHED', callId: T });
+    fsm.send({ type: 'DISCONNECT', callId: C1 }); // (c): promote T
+    expect(fsm.send({ type: 'DISCONNECT', callId: T }).state).toBe('ended');
+  });
+});
+
+describe('CallFsm — blind transfer', () => {
+  it('TRANSFER_ERROR in connected keeps the call up and records lastError', () => {
+    const fsm = at('connected');
+    const s = fsm.send({ type: 'TRANSFER_ERROR', callId: C1, error: err('transfer') });
+    expect(s.state).toBe('connected');
+    expect(s.lastError?.kind).toBe('transfer');
+  });
+
+  it('TRANSFER_ERROR in held keeps the call held and records lastError', () => {
+    const fsm = at('held');
+    const s = fsm.send({ type: 'TRANSFER_ERROR', callId: C1, error: err('transfer') });
+    expect(s.state).toBe('held');
+    expect(s.lastError?.kind).toBe('transfer');
+  });
+
+  it('a successful blind transfer ends the call via the SDK DISCONNECT', () => {
+    const fsm = at('connected');
+    const s = fsm.send({ type: 'DISCONNECT', callId: C1, reason: 'Call transferred.' });
+    expect(s.state).toBe('ended');
+    expect(s.endReason).toBe('Call transferred.');
   });
 });
 

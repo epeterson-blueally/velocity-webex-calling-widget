@@ -15,6 +15,8 @@ export type {
   CallInfo,
   CallSnapshot,
   CallErrorInfo,
+  ConsultInfo,
+  ConsultPhase,
   CallerId,
   SnapshotListener,
   Unsubscribe,

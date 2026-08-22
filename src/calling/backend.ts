@@ -24,12 +24,22 @@ export type RegistrationStatus =
 
 /**
  * The SDK-derived subset of CallEvent the backend is allowed to emit. The
- * controller adds the *intent* events (DIAL_STARTED, ANSWER_STARTED,
- * ANSWER_SECOND_STARTED, MUTE_CHANGED) itself — the backend never fabricates those.
+ * controller adds the *intent* events itself — the backend never fabricates those.
+ * TRANSFER_ERROR is NOT excluded: the SDK emits it (like HOLD_ERROR/RESUME_ERROR),
+ * and the controller may also synthesize it when completeTransfer rejects.
  */
 export type BackendCallEvent = Exclude<
   CallEvent,
-  { type: 'DIAL_STARTED' | 'ANSWER_STARTED' | 'ANSWER_SECOND_STARTED' | 'MUTE_CHANGED' }
+  {
+    type:
+      | 'DIAL_STARTED'
+      | 'ANSWER_STARTED'
+      | 'ANSWER_SECOND_STARTED'
+      | 'MUTE_CHANGED'
+      | 'CONSULT_STARTED'
+      | 'CONSULT_COMPLETED'
+      | 'CONSULT_CANCELLED';
+  }
 >;
 
 /** Everything the backend emits on its single normalized event channel. */
@@ -66,6 +76,18 @@ export interface BackendCall {
   isHeld(): boolean;
   /** Send one DTMF digit. */
   sendDigit(tone: string): Promise<void>;
+  /**
+   * Blind transfer: hand this call's remote party to `target` and drop out. The SDK
+   * ends this call on success (the FSM lands on the resulting DISCONNECT). Rejects /
+   * emits TRANSFER_ERROR on failure. Call this on the active/held primary call.
+   */
+  blindTransfer(target: string): Promise<void>;
+  /**
+   * Consult transfer completion: join this (the primary/transferor) call with the
+   * already-established consult leg named by `consultCallId`. Both legs end on
+   * success. Rejects / emits TRANSFER_ERROR on failure.
+   */
+  consultTransfer(consultCallId: string): Promise<void>;
   /** Hang up / decline. */
   end(): Promise<void>;
   /** Best-effort caller-ID snapshot. */

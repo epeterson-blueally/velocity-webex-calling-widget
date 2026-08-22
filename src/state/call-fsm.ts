@@ -17,8 +17,10 @@
  *    so out-of-order duplicates are idempotent no-ops.
  *
  * The design supports one foreground call plus (for the "answer a second inbound"
- * case) one backgrounded held call and one unanswered pending inbound. Full
- * two-call transfer orchestration is Phase 4; this machine only models the state.
+ * case) one backgrounded held call and one unanswered pending inbound. The
+ * `consulting` state is a dedicated sub-machine (reduceConsulting) that owns BOTH
+ * legs of a consult transfer at once via the `consult` slot — see its doc comment
+ * for the complete/cancel/failure behavior, including the three failure cases.
  */
 
 import type {
@@ -26,6 +28,8 @@ import type {
   CallInfo,
   CallSnapshot,
   CallState,
+  ConsultInfo,
+  ConsultPhase,
   CallerId,
   SnapshotListener,
   Unsubscribe,
@@ -36,8 +40,16 @@ const INITIAL: CallSnapshot = {
   call: null,
   heldCall: null,
   pendingInbound: null,
+  consult: null,
   lastError: null,
   endReason: null,
+};
+
+/** Map a consult leg's sub-phase to the top-level state it becomes when promoted. */
+const PHASE_TO_STATE: Record<ConsultPhase, CallState> = {
+  dialing: 'dialing',
+  connecting: 'connecting',
+  connected: 'connected',
 };
 
 /** States in which no active call exists and only a new call can begin. */
@@ -114,6 +126,31 @@ export class CallFsm {
   // --- reducer ---------------------------------------------------------------
 
   private reduce(s: CallSnapshot, e: CallEvent): CallSnapshot {
+    // 0. Consulting is a self-contained sub-machine owning BOTH legs (call/heldCall/
+    //    pendingInbound are null here), so it must intercept before the normal
+    //    single-active-call routing below.
+    if (s.state === 'consulting') return this.reduceConsulting(s, e);
+
+    // A consult starts from a stable primary call. 'held' is accepted as well as
+    // 'connected' so the controller's hold()→CONSULT_STARTED sequence is race-free:
+    // the primary's HELD event may land before or after CONSULT_STARTED.
+    if (e.type === 'CONSULT_STARTED') {
+      if ((s.state !== 'connected' && s.state !== 'held') || s.call?.callId !== e.callId) return s;
+      return {
+        state: 'consulting',
+        call: null,
+        heldCall: null,
+        pendingInbound: null,
+        consult: {
+          primary: s.call,
+          consult: newCall(e.consultCallId, 'outbound', e.consultCallerId),
+          phase: 'dialing',
+        },
+        lastError: null,
+        endReason: null,
+      };
+    }
+
     // 1. Call-introducing events are handled first: they are the only way out of
     //    idle/ended, and (for INCOMING) the way a second call is offered.
     if (e.type === 'DIAL_STARTED') {
@@ -123,6 +160,7 @@ export class CallFsm {
         call: newCall(e.callId, 'outbound'),
         heldCall: null,
         pendingInbound: null,
+        consult: null,
         lastError: null,
         endReason: null,
       };
@@ -135,6 +173,7 @@ export class CallFsm {
           call: newCall(e.callId, 'inbound', e.callerId),
           heldCall: null,
           pendingInbound: null,
+          consult: null,
           lastError: null,
           endReason: null,
         };
@@ -223,6 +262,10 @@ export class CallFsm {
         // Resume failed: the call stays held; surface the error, don't move.
         return { ...s, lastError: e.error };
 
+      case 'TRANSFER_ERROR':
+        // A blind transfer failed: the call stays up (connected/held); surface it.
+        return { ...s, lastError: e.error };
+
       case 'CALL_ERROR':
         return this.endActive(s, e.error.message, e.error);
 
@@ -251,6 +294,7 @@ export class CallFsm {
         call: s.heldCall,
         heldCall: null,
         pendingInbound: s.pendingInbound,
+        consult: null,
         lastError: error,
         endReason: reason,
       };
@@ -260,6 +304,7 @@ export class CallFsm {
       call: s.call,
       heldCall: null,
       pendingInbound: s.pendingInbound,
+      consult: null,
       lastError: error,
       endReason: reason,
     };
@@ -303,6 +348,7 @@ export class CallFsm {
           call: { ...pending },
           heldCall: { ...s.call },
           pendingInbound: null,
+          consult: null,
           lastError: null,
           endReason: null,
         };
@@ -310,5 +356,155 @@ export class CallFsm {
       default:
         return s;
     }
+  }
+
+  // --- consult transfer sub-machine ------------------------------------------
+
+  /**
+   * The `consulting` sub-state (BUILD-PLAN.md Phase 4). Owns BOTH legs via
+   * `s.consult`: the primary (held throughout) and the consult leg (the live one,
+   * moving dialing → connecting → connected). Resolves three ways:
+   *
+   *  - COMPLETE  (CONSULT_COMPLETED)  → join the calls → `ended` (endReason
+   *    "Transferred."), preserving the primary for the post-call summary.
+   *  - CANCEL    (CONSULT_CANCELLED)  → primary back to the foreground as `held`
+   *    (the controller then resumes it); the consult leg is ended by the controller.
+   *  - The consult leg DYING on its own — the three failure cases:
+   *      (a) it errors on dial            → CALL_ERROR on the consult leg
+   *      (b) the target declines / drops  → DISCONNECT on the consult leg
+   *    both fall back to a held primary (controller resumes on cancel only; here the
+   *    primary is left held for the agent), surfacing the error for case (a).
+   *  - (c) the PRIMARY's far end hangs up mid-consult → DISCONNECT on the primary:
+   *    the consult leg is promoted to the foreground in its current phase so the
+   *    agent keeps talking to the transfer target, and lastError names which leg
+   *    died. The transfer can no longer complete (nothing left to join).
+   */
+  private reduceConsulting(s: CallSnapshot, e: CallEvent): CallSnapshot {
+    const c = s.consult;
+    if (!c) return s; // invariant: consult is non-null whenever state === 'consulting'
+
+    // Whole-transfer control events, independent of which leg they name.
+    if (e.type === 'CONSULT_COMPLETED') {
+      return {
+        state: 'ended',
+        call: c.primary, // the transferred party, for the post-call summary
+        heldCall: null,
+        pendingInbound: null,
+        consult: null,
+        lastError: null,
+        endReason: 'Transferred.',
+      };
+    }
+    if (e.type === 'CONSULT_CANCELLED') {
+      // Return the primary to the foreground, still held; the controller resumes it.
+      return this.fallbackToHeldPrimary(c, s.lastError);
+    }
+    if (e.type === 'TRANSFER_ERROR') {
+      // completeTransfer failed: stay in the consult so the agent can retry/cancel.
+      return { ...s, lastError: e.error };
+    }
+
+    // Everything else is routed to whichever of the two legs it names.
+    if (e.callId === c.consult.callId) return this.reduceConsultLeg(s, c, e);
+    if (e.callId === c.primary.callId) return this.reduceConsultPrimary(s, c, e);
+    return s; // unknown callId → ignore
+  }
+
+  /** Events for the live consult leg (the one being dialed / talked to). */
+  private reduceConsultLeg(s: CallSnapshot, c: ConsultInfo, e: CallEvent): CallSnapshot {
+    switch (e.type) {
+      case 'PROGRESS':
+      case 'ALERTING':
+        return s; // ring-back; `phase: 'dialing'` already conveys this
+
+      case 'CONNECT':
+        return c.phase === 'dialing'
+          ? { ...s, consult: { ...c, phase: 'connecting' } }
+          : s;
+
+      case 'ESTABLISHED':
+        if (c.phase === 'connected') return s;
+        return {
+          ...s,
+          consult: {
+            ...c,
+            phase: 'connected',
+            consult: { ...c.consult, connectedAt: c.consult.connectedAt ?? this.now() },
+          },
+        };
+
+      case 'REMOTE_MEDIA':
+        if (c.consult.hasRemoteMedia) return s;
+        return { ...s, consult: { ...c, consult: { ...c.consult, hasRemoteMedia: true } } };
+
+      case 'CALLER_ID':
+        return { ...s, consult: { ...c, consult: { ...c.consult, callerId: e.callerId } } };
+
+      case 'MUTE_CHANGED':
+        if (c.consult.muted === e.muted) return s;
+        return { ...s, consult: { ...c, consult: { ...c.consult, muted: e.muted } } };
+
+      case 'DISCONNECT':
+        // Failure (b) / normal cancel-race: consult target gone → back to primary.
+        return this.fallbackToHeldPrimary(c, s.lastError);
+
+      case 'CALL_ERROR':
+        // Failure (a): consult leg errored (e.g. dial failed) → back to primary.
+        return this.fallbackToHeldPrimary(c, e.error);
+
+      // HELD/RESUMED for the consult leg are not modelled here.
+      default:
+        return s;
+    }
+  }
+
+  /** Events for the held primary while consulting. */
+  private reduceConsultPrimary(s: CallSnapshot, c: ConsultInfo, e: CallEvent): CallSnapshot {
+    switch (e.type) {
+      case 'DISCONNECT':
+        // Failure (c): the ORIGINAL caller hung up mid-consult. Promote the consult
+        // leg to the foreground so the agent keeps talking to the transfer target.
+        return this.promoteConsultLeg(c, {
+          kind: 'transfer',
+          message: 'The original caller hung up during the consult.',
+        });
+
+      case 'CALL_ERROR':
+        // The primary errored out mid-consult; same promotion, surface its error.
+        return this.promoteConsultLeg(c, e.error);
+
+      case 'CALLER_ID':
+        return { ...s, consult: { ...c, primary: { ...c.primary, callerId: e.callerId } } };
+
+      // The primary is expected to be held; HELD/RESUMED confirmations are no-ops.
+      default:
+        return s;
+    }
+  }
+
+  /** Move the primary back to the foreground as a held call; drop the consult leg. */
+  private fallbackToHeldPrimary(c: ConsultInfo, lastError: CallSnapshot['lastError']): CallSnapshot {
+    return {
+      state: 'held',
+      call: c.primary,
+      heldCall: null,
+      pendingInbound: null,
+      consult: null,
+      lastError,
+      endReason: null,
+    };
+  }
+
+  /** Promote the consult leg to the foreground in its current phase; drop the primary. */
+  private promoteConsultLeg(c: ConsultInfo, lastError: CallSnapshot['lastError']): CallSnapshot {
+    return {
+      state: PHASE_TO_STATE[c.phase],
+      call: c.consult,
+      heldCall: null,
+      pendingInbound: null,
+      consult: null,
+      lastError,
+      endReason: null,
+    };
   }
 }

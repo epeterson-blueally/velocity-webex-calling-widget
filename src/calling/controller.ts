@@ -452,6 +452,165 @@ export class CallingController {
     }
   }
 
+  // --- transfers -------------------------------------------------------------
+
+  /**
+   * Blind transfer the active (connected OR held) call to `target`. The SDK ends
+   * the call on success; the FSM lands on the resulting DISCONNECT. A failure is
+   * surfaced via TRANSFER_ERROR and leaves the call up.
+   */
+  async blindTransfer(target: string): Promise<void> {
+    const dest = target.trim();
+    if (!dest) {
+      this.setActionError('Enter a transfer destination first.');
+      return;
+    }
+    const snap = this.fsm.getSnapshot();
+    if ((snap.state !== 'connected' && snap.state !== 'held') || !snap.call) return;
+    const call = this.backend.getCall(snap.call.callId);
+    if (!call) return;
+    this.clearActionError();
+    try {
+      await call.blindTransfer(dest);
+    } catch (err) {
+      this.fsm.send({
+        type: 'TRANSFER_ERROR',
+        callId: call.id,
+        error: { kind: 'transfer', message: `Blind transfer failed: ${errMsg(err)}` },
+      });
+    }
+  }
+
+  /**
+   * Start a consult transfer: create the consult leg, hold the primary, then dial
+   * the leg. Ordering matters — the consult call object is created first so a
+   * makeCall failure leaves the primary untouched; the primary is then held before
+   * the leg takes media (per DISCOVERY.md §5). On dial failure (failure case a) the
+   * FSM falls back to the held primary.
+   */
+  async startConsult(target: string): Promise<void> {
+    const dest = target.trim();
+    if (!dest) {
+      this.setActionError('Enter a consult destination first.');
+      return;
+    }
+    const snap = this.fsm.getSnapshot();
+    if (snap.state !== 'connected' || !snap.call) return;
+    const primaryId = snap.call.callId;
+    const primary = this.backend.getCall(primaryId);
+    if (!primary) return;
+    this.clearActionError();
+
+    // 1. Create the consult leg object (no media yet). Primary untouched if this fails.
+    let consult: BackendCall;
+    try {
+      consult = await this.backend.makeCall(dest);
+    } catch (err) {
+      this.setActionError(`Could not start the consult call: ${errMsg(err)}`);
+      return;
+    }
+
+    // 2. Hold the primary before the consult leg takes media. Discard the leg if
+    //    the hold fails, and leave the primary connected.
+    try {
+      await primary.hold();
+    } catch (err) {
+      this.fsm.send({
+        type: 'HOLD_ERROR',
+        callId: primaryId,
+        error: { kind: 'hold', message: `Could not hold the call to consult: ${errMsg(err)}` },
+      });
+      try {
+        await consult.end();
+      } catch {
+        // best-effort discard of the never-dialed consult object
+      }
+      return;
+    }
+
+    // 3. Enter the consult sub-state, THEN dial (so leg events have somewhere to land).
+    this.fsm.send({
+      type: 'CONSULT_STARTED',
+      callId: primaryId,
+      consultCallId: consult.id,
+      consultCallerId: consult.getCallerId() ?? undefined,
+    });
+    try {
+      await consult.dial();
+    } catch (err) {
+      // Failure case (a): the consult leg errored on dial → fall back to held primary.
+      this.fsm.send({
+        type: 'CALL_ERROR',
+        callId: consult.id,
+        error: { kind: 'setup', message: `Consult dial failed: ${errMsg(err)}` },
+      });
+    }
+  }
+
+  /** Complete the in-flight consult transfer, joining the primary and consult legs. */
+  async completeConsult(): Promise<void> {
+    const snap = this.fsm.getSnapshot();
+    if (snap.state !== 'consulting' || !snap.consult) return;
+    const primaryId = snap.consult.primary.callId;
+    const consultId = snap.consult.consult.callId;
+    const primary = this.backend.getCall(primaryId);
+    if (!primary) return;
+    this.clearActionError();
+    try {
+      await primary.consultTransfer(consultId);
+      // Both legs end on success; move straight to ended rather than racing the two
+      // DISCONNECTs. A stray late DISCONNECT for either leg is then a terminal no-op.
+      this.fsm.send({ type: 'CONSULT_COMPLETED', callId: primaryId });
+    } catch (err) {
+      // Stay in the consult so the agent can retry or cancel.
+      this.fsm.send({
+        type: 'TRANSFER_ERROR',
+        callId: primaryId,
+        error: { kind: 'transfer', message: `Transfer failed: ${errMsg(err)}` },
+      });
+    }
+  }
+
+  /**
+   * Cancel the in-flight consult: end the consult leg and resume the primary. The
+   * FSM is moved out of `consulting` to `held(primary)` first (deterministically),
+   * so the subsequent resume lands on the now-foreground primary.
+   */
+  async cancelConsult(): Promise<void> {
+    const snap = this.fsm.getSnapshot();
+    if (snap.state !== 'consulting' || !snap.consult) return;
+    const primaryId = snap.consult.primary.callId;
+    const consultId = snap.consult.consult.callId;
+    const primary = this.backend.getCall(primaryId);
+    const consult = this.backend.getCall(consultId);
+    this.clearActionError();
+
+    // Deterministic transition first: consulting → held(primary), consult slot cleared.
+    this.fsm.send({ type: 'CONSULT_CANCELLED', callId: primaryId });
+
+    // End the consult leg. Its DISCONNECT now names an untracked id → FSM no-op.
+    if (consult) {
+      try {
+        await consult.end();
+      } catch (err) {
+        this.setActionError(`Ending the consult call reported an error: ${errMsg(err)}`);
+      }
+    }
+
+    // Resume the primary (the FSM is now in 'held' with the primary in the foreground).
+    if (primary) {
+      try {
+        await primary.resume();
+      } catch (err) {
+        this.fsm.send({
+          type: 'RESUME_ERROR',
+          callId: primaryId,
+          error: { kind: 'resume', message: `Resume failed: ${errMsg(err)}` },
+        });
+      }
+    }
+  }
+
   // --- status emission -------------------------------------------------------
 
   private setActionError(message: string): void {

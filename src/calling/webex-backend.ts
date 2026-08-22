@@ -24,6 +24,7 @@ import {
   CALL_EVENT_KEYS,
   CallType,
   LINE_EVENTS,
+  TransferType,
   createMicrophoneStream as bundledCreateMicrophoneStream,
 } from '@webex/calling';
 import type {
@@ -282,6 +283,26 @@ class WebexBackendCall implements BackendCall {
     return Promise.resolve();
   }
 
+  blindTransfer(target: string): Promise<void> {
+    // BLIND: transferTarget mandatory, transferCallId undefined (DISCOVERY.md §5).
+    try {
+      this.sdk.completeTransfer(TransferType.BLIND, undefined, target);
+    } catch (err) {
+      return Promise.reject(err instanceof Error ? err : new Error(String(err)));
+    }
+    return Promise.resolve();
+  }
+
+  consultTransfer(consultCallId: string): Promise<void> {
+    // CONSULT: transferCallId (the consult leg to merge back) mandatory; no target.
+    try {
+      this.sdk.completeTransfer(TransferType.CONSULT, consultCallId);
+    } catch (err) {
+      return Promise.reject(err instanceof Error ? err : new Error(String(err)));
+    }
+    return Promise.resolve();
+  }
+
   end(): Promise<void> {
     this.sdk.end();
     return Promise.resolve();
@@ -340,6 +361,9 @@ class WebexBackendCall implements BackendCall {
     });
     c.on(CALL_EVENT_KEYS.RESUME_ERROR, (err: CallError) => {
       this.emit({ kind: 'call', event: { type: 'RESUME_ERROR', callId: this.id, error: mapCallError(err, 'resume') } });
+    });
+    c.on(CALL_EVENT_KEYS.TRANSFER_ERROR, (err: CallError) => {
+      this.emit({ kind: 'call', event: { type: 'TRANSFER_ERROR', callId: this.id, error: mapCallError(err, 'transfer') } });
     });
   }
 

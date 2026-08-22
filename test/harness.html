@@ -72,6 +72,27 @@
       </div>
     </fieldset>
 
+    <fieldset>
+      <legend>Transfer</legend>
+      <div class="row">
+        <input id="xferDest" placeholder="+15551234567 or sip:user@domain" size="30" />
+        <button id="blind" disabled>Blind transfer</button>
+        <button id="consult" disabled>Consult (dial target)</button>
+      </div>
+      <div class="row">
+        <button id="completeConsult" disabled>Complete transfer (join)</button>
+        <button id="cancelConsult" disabled>Cancel consult (resume primary)</button>
+      </div>
+      <p style="color: #555; font-size: 0.78rem; margin: 4px 0 0">
+        Blind: enter a destination, click Blind (from connected or held) — the call
+        transfers and drops. Consult: click Consult to hold the primary and dial the
+        target; once talking, Complete joins the two calls, or Cancel drops the consult
+        and resumes the primary. If the target declines the primary comes back on hold;
+        if the original caller hangs up mid-consult the consult call is promoted to your
+        active call.
+      </p>
+    </fieldset>
+
     <h4>Status</h4>
     <div id="status">(not started)</div>
     <h4>Log</h4>
@@ -120,6 +141,12 @@
         $('end').disabled = !(s === 'connected' || s === 'held' || s === 'connecting' || s === 'dialing' || s === 'ringing_in');
         $('answerSecond').disabled = !pending;
         $('declineSecond').disabled = !pending;
+        // Transfers: blind from connected/held; consult starts from connected;
+        // complete/cancel only while consulting.
+        $('blind').disabled = !(s === 'connected' || s === 'held');
+        $('consult').disabled = s !== 'connected';
+        $('completeConsult').disabled = s !== 'consulting';
+        $('cancelConsult').disabled = s !== 'consulting';
       }
 
       function renderStatus(status) {
@@ -186,6 +213,10 @@
       $('end').onclick = guard(() => controller.end());
       $('answerSecond').onclick = guard(() => controller.answerSecond());
       $('declineSecond').onclick = guard(() => controller.declineSecond());
+      $('blind').onclick = guard(() => controller.blindTransfer($('xferDest').value.trim()));
+      $('consult').onclick = guard(() => controller.startConsult($('xferDest').value.trim()));
+      $('completeConsult').onclick = guard(() => controller.completeConsult());
+      $('cancelConsult').onclick = guard(() => controller.cancelConsult());
 
       // DTMF keypad.
       const digits = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '*', '0', '#'];

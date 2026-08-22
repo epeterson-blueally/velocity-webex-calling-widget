@@ -34,6 +34,8 @@ export class MockCall implements BackendCall {
     return this.muted;
   });
   sendDigit = vi.fn(async (_tone: string) => {});
+  blindTransfer = vi.fn(async (_target: string) => {});
+  consultTransfer = vi.fn(async (_consultCallId: string) => {});
   end = vi.fn(async () => {});
 
   constructor(id: string, direction: CallDirection, callerId: CallerId | null = null) {
