@@ -13,7 +13,7 @@ Restart protocol: new Claude Code session in this repo → kickoff prompt + "Res
 |---|---|---|---|---|
 | 0 | Discovery & verification | Sonnet · high | yes | DONE — probe run; AUTH DECISION PENDING (see gate log) |
 | 1 | Scaffold, CI, Pages | Sonnet · low | yes | DONE — Pages LIVE, gate cleared |
-| 2 | Auth module | Opus · medium | yes (self-OAuth) | IN PROGRESS (subagent) |
+| 2 | Auth module | Opus · medium | yes (self-OAuth) | DONE (built + defect fixed + verified) — AWAITING ERIK GATE |
 | 3 | Calling core | Opus · high | yes | not started |
 | 4 | Transfers (blind + consult) | Opus · high | no | not started |
 | 5 | WxCC desktop-state integration | Opus · medium | yes | not started |
@@ -44,6 +44,22 @@ Restart protocol: new Claude Code session in this repo → kickoff prompt + "Res
   - **No Cisco sample combines `@webex/calling` + `@wxcc-desktop/sdk`** — this integration is novel.
   - `reference/` (249M of clones) is git-ignored per plan; patterns extracted into DISCOVERY.md.
 
+## Phase 2 review note (orchestrator)
+
+- Orchestrator diff review caught a real defect: the OAuth callback posted with
+  `targetOrigin = Pages origin`, but under the web-component packaging (primary; the layout JSON
+  uses `comp`+`script`) the widget runs in the Agent Desktop document → opener is DESKTOP-origin →
+  the browser silently drops the message → sign-in never completes. Fix in progress: carry the
+  opener origin inside the OAuth `state`; callback targets that origin; widget still validates
+  ev.origin===Pages + nonce. **FIXED + verified** (28/28 tests, tsc clean, build ok): state =
+  base64url(JSON{n:nonce,o:openerOrigin}); callback validates `o` and targets it, falls back to '*'
+  only on decode failure (message carries only a one-time code guarded by PKCE+nonce, no secret).
+- RESIDUAL live-only risk (Phase 3 gate): even with the targetOrigin fix, COOP/cross-origin-embed
+  policy in the real Agent Desktop could sever `window.opener` for a popup opened from a
+  cross-origin-embedded widget. Must validate the popup→opener postMessage bridge in the live
+  desktop; if severed, fallback = iframe packaging (agentx-wc-iframe, Pages-origin) or a
+  BroadcastChannel/localStorage-relay design. Also flagged for Phase 8 LENS B.
+
 ## Open questions / pending gate answers
 
 - [ ] **Phase 0 gate (Erik) — OPEN, blocks Phase 1 start.** Two parts:
@@ -54,6 +70,16 @@ Restart protocol: new Claude Code session in this repo → kickoff prompt + "Res
          `Non-Contact Center Call` idle code existence + ID, ACD endpoint type (WebRTC vs extension).
 - [ ] Empirical (deferred to Phase 3 live test): `ICall.mute()` twice — toggle or idempotent?
       No `unmute()` in typings; confirm against a live call.
+- [ ] **Phase 2 gate (Erik) — OPEN, blocks Phase 3 (calling core needs a working token):**
+      1. Create a Webex Integration at developer.webex.com/my-apps with scopes
+         `spark:calls_read spark:calls_write spark:xsi spark:webrtc_calling`, redirect URI =
+         `https://epeterson-blueally.github.io/velocity-webex-calling-widget/oauth-callback.html`.
+         Provide the **client ID** (→ `client-id` attribute). The **client_secret** stays secret,
+         goes ONLY into the serverless backend env — never in the repo/bundle.
+      2. Choose the serverless backend host (Cloudflare Workers / AWS Lambda / Azure Functions) and
+         we deploy the /token + /refresh contract (docs/auth-backend-contract.md) there.
+      NOTE: callback page (public/oauth-callback.html) deploy-wiring is deferred to Phase 7 (Pages
+      workflow currently ships dist/ only); the redirect URI above assumes it lands at Pages root.
 
 ## Gate log
 
