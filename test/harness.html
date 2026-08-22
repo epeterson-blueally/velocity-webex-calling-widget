@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<!-- Phase 3 smoke-test harness.
+     Loads the REAL built bundle (../dist/velocity-webex-calling.js) plus the
+     @webex/calling UMD runtime from the CDN (the same script token-probe.html uses,
+     which the bootstrap reads as the global `Calling`). Uses the StoreTokenProvider
+     path so NO OAuth backend is needed — paste a token and go.
+
+     Run:  npm run build   (produces ../dist/velocity-webex-calling.js), then open
+     this file in Chrome/Edge (a plain file:// open works; the SDK reaches Cisco's
+     servers directly). Paste a Webex access token that carries the calling scopes
+     (see DISCOVERY.md §1), click Register, then Dial / Answer / Hold / Mute / DTMF.
+
+     This exercises: register/re-register status, outbound dial (mic capture),
+     inbound answer/decline, hold/resume, mute/unmute, DTMF, end — the Phase 3 live
+     gate checklist. Two-way audio + device/echo behaviour are what the human
+     verifies here (they cannot be unit-tested). -->
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Velocity Webex Calling — Phase 3 harness</title>
+    <style>
+      body { font-family: -apple-system, Segoe UI, Roboto, sans-serif; max-width: 760px; margin: 1.5rem auto; color: #1a1a1a; }
+      h3 { margin-bottom: 0.2rem; }
+      .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
+      button { padding: 6px 12px; cursor: pointer; }
+      input { padding: 6px; font-size: 1rem; }
+      #status { background: #0f172a; color: #d1fae5; padding: 12px; border-radius: 6px; white-space: pre-wrap; word-break: break-all; font-family: ui-monospace, Menlo, monospace; font-size: 0.8rem; min-height: 6rem; }
+      #log { background: #eee; padding: 10px; border-radius: 6px; white-space: pre-wrap; word-break: break-all; font-size: 0.78rem; max-height: 14rem; overflow: auto; }
+      .pad { display: grid; grid-template-columns: repeat(3, 3rem); gap: 4px; }
+      fieldset { border: 1px solid #ccc; border-radius: 6px; margin: 10px 0; }
+      audio { display: none; }
+    </style>
+  </head>
+  <body>
+    <h3>Velocity Webex Calling — Phase 3 smoke test</h3>
+    <p style="color: #555">
+      StoreTokenProvider path (no OAuth backend). Paste a Webex access token with the
+      calling scopes, then Register. Nothing is sent anywhere except Cisco's servers.
+    </p>
+
+    <textarea id="token" rows="3" style="width: 100%" placeholder="Paste access token (JWT starting eyJ)"></textarea>
+    <div class="row">
+      <button id="register">Register line</button>
+      <button id="deregister" disabled>Dispose</button>
+    </div>
+
+    <fieldset>
+      <legend>Outbound</legend>
+      <div class="row">
+        <input id="dest" placeholder="+15551234567 or sip:user@domain" size="34" />
+        <button id="dial" disabled>Dial</button>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>In-call controls</legend>
+      <div class="row">
+        <button id="answer" disabled>Answer</button>
+        <button id="decline" disabled>Decline</button>
+        <button id="hold" disabled>Hold</button>
+        <button id="resume" disabled>Resume</button>
+        <button id="mute" disabled>Mute</button>
+        <button id="unmute" disabled>Unmute</button>
+        <button id="end" disabled>End</button>
+      </div>
+      <div class="row">
+        <button id="answerSecond" disabled>Answer 2nd (hold current)</button>
+        <button id="declineSecond" disabled>Decline 2nd</button>
+      </div>
+      <div class="pad" id="dtmf">
+        <!-- digits injected by script -->
+      </div>
+    </fieldset>
+
+    <h4>Status</h4>
+    <div id="status">(not started)</div>
+    <h4>Log</h4>
+    <div id="log"></div>
+
+    <!-- Media sinks so the human can hear/verify two-way audio. -->
+    <audio id="remote" autoplay></audio>
+
+    <!-- The @webex/calling UMD runtime → global `Calling` (bootstrap reads this). -->
+    <script src="https://unpkg.com/webex@3.12.0/umd/calling.min.js"></script>
+    <!-- The real built bundle → global `VelocityWebexCalling`. -->
+    <script src="../dist/velocity-webex-calling.js"></script>
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const logEl = $('log');
+      const log = (m) => {
+        const line = typeof m === 'string' ? m : JSON.stringify(m);
+        logEl.textContent += line + '\n';
+        logEl.scrollTop = logEl.scrollHeight;
+      };
+
+      if (!window.VelocityWebexCalling) {
+        log('ERROR: bundle not found. Run `npm run build` first, then reload.');
+      }
+      if (!window.Calling) {
+        log('ERROR: @webex/calling UMD not loaded (CDN blocked?).');
+      }
+
+      const { CallingController, WebexCallingBackend, StoreTokenProvider, createWebexCallingClient } =
+        window.VelocityWebexCalling || {};
+
+      let controller = null;
+
+      function setButtons(status) {
+        const s = status ? status.call.state : 'idle';
+        const reg = status ? status.registration : 'unregistered';
+        const registered = reg === 'registered';
+        const pending = status && status.call.pendingInbound;
+        $('dial').disabled = !registered || s !== 'idle';
+        $('answer').disabled = s !== 'ringing_in';
+        $('decline').disabled = s !== 'ringing_in';
+        $('hold').disabled = s !== 'connected';
+        $('resume').disabled = s !== 'held';
+        $('mute').disabled = !(s === 'connected' || s === 'held');
+        $('unmute').disabled = !(s === 'connected' || s === 'held');
+        $('end').disabled = !(s === 'connected' || s === 'held' || s === 'connecting' || s === 'dialing' || s === 'ringing_in');
+        $('answerSecond').disabled = !pending;
+        $('declineSecond').disabled = !pending;
+      }
+
+      function renderStatus(status) {
+        $('status').textContent = JSON.stringify(status, null, 2);
+        setButtons(status);
+      }
+
+      $('register').onclick = async () => {
+        const token = $('token').value.trim();
+        if (!token) return log('Paste a token first.');
+        if (controller) controller.dispose();
+        try {
+          log('Initializing Webex calling client (bootstrap → global Calling)…');
+          const { callingClient, createMicrophoneStream } = await createWebexCallingClient(token);
+          log('Calling client ready. Wiring backend + controller…');
+
+          // StoreTokenProvider consumes an element attribute; give it a detached host.
+          const host = document.createElement('div');
+          host.setAttribute('access-token', token);
+          const tokenProvider = new StoreTokenProvider(host);
+
+          const backend = new WebexCallingBackend({
+            callingClient,
+            createMicrophoneStream,
+            remoteAudioElement: $('remote'),
+          });
+          controller = new CallingController({ backend, tokenProvider });
+          controller.onChange(renderStatus);
+          renderStatus(controller.getStatus());
+          $('deregister').disabled = false;
+
+          await controller.start();
+          log('controller.start() issued; watch Status for registration → registered.');
+        } catch (err) {
+          log('Register failed: ' + (err && err.message ? err.message : String(err)));
+        }
+      };
+
+      $('deregister').onclick = () => {
+        if (controller) {
+          controller.dispose();
+          controller = null;
+          log('Controller disposed.');
+        }
+        $('deregister').disabled = true;
+      };
+
+      const guard = (fn) => async () => {
+        if (!controller) return log('Register first.');
+        try {
+          await fn();
+        } catch (err) {
+          log('Action error: ' + (err && err.message ? err.message : String(err)));
+        }
+      };
+
+      $('dial').onclick = guard(() => controller.dial($('dest').value.trim()));
+      $('answer').onclick = guard(() => controller.answer());
+      $('decline').onclick = guard(() => controller.decline());
+      $('hold').onclick = guard(() => controller.hold());
+      $('resume').onclick = guard(() => controller.resume());
+      $('mute').onclick = guard(() => controller.mute());
+      $('unmute').onclick = guard(() => controller.unmute());
+      $('end').onclick = guard(() => controller.end());
+      $('answerSecond').onclick = guard(() => controller.answerSecond());
+      $('declineSecond').onclick = guard(() => controller.declineSecond());
+
+      // DTMF keypad.
+      const digits = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '*', '0', '#'];
+      for (const d of digits) {
+        const b = document.createElement('button');
+        b.textContent = d;
+        b.onclick = guard(() => controller.sendDigit(d));
+        $('dtmf').appendChild(b);
+      }
+    </script>
+  </body>
+</html>

@@ -19,7 +19,10 @@ module.exports = (env, argv) => {
 
   return {
     mode: isProd ? 'production' : 'development',
-    entry: './src/index.ts',
+    // Entry is bundle.ts (element + Phase 3 calling API), NOT index.ts. index.ts
+    // stays SDK-free so unit tests can import it without loading @webex/calling;
+    // bundle.ts is the only module that pulls the SDK in. See src/bundle.ts.
+    entry: './src/bundle.ts',
     devtool: isProd ? false : 'source-map',
     output: {
       path: path.resolve(__dirname, 'dist'),
@@ -45,6 +48,12 @@ module.exports = (env, argv) => {
         assert: require.resolve('assert/'),
         querystring: require.resolve('querystring-es3'),
         buffer: require.resolve('buffer/'),
+        // Added at Phase 3 when @webex/calling was installed: its transitive deps
+        // (asn1.js needs `vm`; file-type/strtok3 reference `fs`) pull two more Node
+        // builtins. `fs` is stubbed out (false) — the file-type code path is never
+        // reached in the browser; `vm` gets a real browser shim.
+        vm: require.resolve('vm-browserify'),
+        fs: false,
       },
     },
     module: {

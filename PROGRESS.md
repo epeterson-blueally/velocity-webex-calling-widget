@@ -14,7 +14,7 @@ Restart protocol: new Claude Code session in this repo → kickoff prompt + "Res
 | 0 | Discovery & verification | Sonnet · high | yes | DONE — probe run; AUTH DECISION PENDING (see gate log) |
 | 1 | Scaffold, CI, Pages | Sonnet · low | yes | DONE — Pages LIVE, gate cleared |
 | 2 | Auth module | Opus · medium | yes (self-OAuth) | DONE (built + defect fixed + verified) — AWAITING ERIK GATE |
-| 3 | Calling core | Opus · high | yes | IN PROGRESS (subagent, mock-tested; live gate later) |
+| 3 | Calling core | Opus · high | yes | CODE DONE + verified; LIVE GATE pending (blocked on Gate 2) |
 | 4 | Transfers (blind + consult) | Opus · high | no | not started |
 | 5 | WxCC desktop-state integration | Opus · medium | yes | not started |
 | 6 | UI & dial pad | Sonnet · medium | no | not started |
@@ -59,6 +59,32 @@ Restart protocol: new Claude Code session in this repo → kickoff prompt + "Res
   cross-origin-embedded widget. Must validate the popup→opener postMessage bridge in the live
   desktop; if severed, fallback = iframe packaging (agentx-wc-iframe, Pages-origin) or a
   BroadcastChannel/localStorage-relay design. Also flagged for Phase 8 LENS B.
+
+## Phase 3 summary + carried decisions (orchestrator)
+
+- Built src/state (SDK-free CallFsm) + src/calling (CallingController, CallingBackend adapter seam,
+  WebexCallingBackend = only @webex/calling importer, bootstrap = live SDK-init seam, MuteAdapter).
+  FSM states: idle · dialing · ringing_in · connecting · connected ⇄ held · ended. Guards: terminal,
+  identity (unknown callId ignored), phase (out-of-order CONNECT/ESTABLISHED/HELD/RESUMED = no-ops).
+  Answer-second-inbound modeled (pendingInbound + heldCall promotion). Re-register on token change +
+  bounded exponential backoff on socket drop. Verified by orchestrator: `tsc` clean, `npm run lint`
+  clean (no-floating-promises + no-misused-promises, type-checked, confirmed active), **225/225 tests**
+  (incl. the out-of-order matrix), `npm run build` ok. Bundle grew 3.97 KiB → **2.58 MiB** (SDK bundled).
+- **CARRIED DECISION — MUST RESOLVE BY PHASE 7 (packaging):** bootstrap inits the live client from the
+  CDN UMD global `Calling` (the `webex` monolith wrapper), because @webex/calling's `createClient` needs
+  a full `webex` core only the monolith assembles. But webex-backend.ts ALSO bundles @webex/calling
+  (for its enums) → the 2.58 MiB bundle STILL needs a CDN `<script>` at runtime. The production widget
+  is loaded as a SINGLE script via the layout JSON, so `globalThis.Calling` won't exist unless we bundle
+  the `webex` monolith (preferred — self-contained, no CDN/CSP risk) or have the widget inject the CDN
+  script. Harness works today (it loads the CDN script), so the Phase 3 harness gate is unaffected; the
+  REAL-desktop load needs this resolved. Decision: bundle the monolith in Phase 6/7.
+- **Phase 3 LIVE GATE is blocked on Gate 2**: the harness smoke test (register/dial/answer) needs a
+  token carrying calling scopes, which only exists after the Webex Integration + Cloudflare backend
+  (Gate 2) are live and a real sign-in completes. So Gate 2 → then Phase 3 live smoke test.
+- UNRESOLVED for the Phase 3 live gate: (1) mute toggle-vs-idempotent (adapter handles both; confirm
+  live); (2) token-refresh mid-call — controller re-registers on token change, but the webex core is
+  built once by bootstrap with the initial token; mid-call refresh reinit path is unproven live;
+  (3) two-WebRTC-engine echo / audio device selection (human-verified in harness, Phase 6 adds picker).
 
 ## Open questions / pending gate answers
 
