@@ -11,7 +11,7 @@ Restart protocol: new Claude Code session in this repo → kickoff prompt + "Res
 
 | Phase | Name | Model/Effort | Gate | Status |
 |---|---|---|---|---|
-| 0 | Discovery & verification | Sonnet · high | yes | DONE (subagent) — AWAITING ERIK GATE |
+| 0 | Discovery & verification | Sonnet · high | yes | DONE — probe run; AUTH DECISION PENDING (see gate log) |
 | 1 | Scaffold, CI, Pages | Sonnet · low | yes | not started |
 | 2 | Auth module | Opus · medium | maybe | not started |
 | 3 | Calling core | Opus · high | yes | not started |
@@ -57,4 +57,16 @@ Restart protocol: new Claude Code session in this repo → kickoff prompt + "Res
 
 ## Gate log
 
-_(none resolved yet)_
+- 2026-08-22 **Gate 0 — token probe result (Erik ran it):**
+  - `Calling.init()` ok; webex `ready` fired; `wrapper.register()` RESOLVED → the desktop
+    `$STORE.auth.accessToken` is a valid Webex token (device + mercury registration succeed).
+  - BUT `calling.callingClient` never materialized (15s timeout) → calling-client init failed.
+  - **Conclusion: `$STORE` passthrough does NOT support Webex Calling line registration.**
+    → **Auth architecture = self-OAuth** (widget runs its own Webex OAuth for the calling user).
+  - Caveat the probe can't distinguish: timeout = missing calling *scopes* (self-OAuth fixes) OR
+    agent missing a Webex Calling *license/line* (Control Hub §7b — must confirm; self-OAuth won't
+    help if unlicensed). Agent uses the Cisco Call line in Teams per handoff, so licensed is likely.
+  - Consequence (from Phase 0 PKCE finding): self-OAuth REQUIRES a small serverless token-exchange
+    backend holding the client_secret — pure browser OAuth is impossible on Webex. Backend host TBD.
+  - PENDING Erik decisions: (1) confirm self-OAuth direction, (2) serverless backend host,
+    (3) Control Hub §7 a–d checks.
