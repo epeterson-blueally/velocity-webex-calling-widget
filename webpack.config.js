@@ -80,6 +80,7 @@ module.exports = (env, argv) => {
         patterns: [
           { from: path.resolve(__dirname, 'public/oauth-callback.html'), to: 'oauth-callback.html' },
           { from: path.resolve(__dirname, 'public/live-test.html'), to: 'live-test.html' },
+          { from: path.resolve(__dirname, 'public/sdk-raw-test.html'), to: 'sdk-raw-test.html' },
         ],
       }),
     ],

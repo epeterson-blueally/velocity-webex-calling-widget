@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<!--
+  sdk-raw-test.html — ISOLATION test. Drives the raw Webex calling SDK from the CDN
+  exactly like Cisco's official web-calling-sdk-samples (Calling.init -> register ->
+  line.register -> makeCall -> dial), with NO widget code involved. Uses Cisco's
+  sample callingConfig (all client features true).
+
+  Purpose: outbound calls fail with Mobius 400 "Invalid format" in our widget. This
+  page removes our widget from the equation. If it ALSO fails "Invalid format", the
+  problem is the SDK/account/Mobius (not our code) -> Cisco escalation. If it works,
+  our invocation differs and we fix it.
+
+  Token: paste a CALLING-SCOPED access token. Easiest source: in a working widget
+  session, DevTools -> Network -> click any request to *.wbx2.com -> Request Headers
+  -> copy the value after "Authorization: Bearer ". That IS the calling token.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex" />
+  <title>Raw Webex Calling SDK isolation test</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; max-width: 760px; margin: 1.5rem auto; padding: 0 1rem; }
+    label { display:block; font-size:.85rem; font-weight:600; margin:.6rem 0 .15rem; }
+    input, textarea { width:100%; box-sizing:border-box; padding:6px 8px; font-family:ui-monospace,Menlo,monospace; }
+    button { padding:8px 14px; margin-top:.6rem; cursor:pointer; }
+    pre { background:#eee; padding:1em; white-space:pre-wrap; word-break:break-all; max-height:50vh; overflow:auto; }
+  </style>
+</head>
+<body>
+  <h2>Raw Webex Calling SDK isolation test</h2>
+  <p style="color:#555">No widget code. Drives the CDN SDK like Cisco's official sample.</p>
+
+  <label for="tok">Calling-scoped access token (from a Mobius request's Authorization: Bearer …)</label>
+  <textarea id="tok" rows="3" placeholder="eyJ…"></textarea>
+
+  <label for="dest">Destination (number/extension, e.g. +14047265437)</label>
+  <input id="dest" type="text" value="+14047265437" />
+
+  <label for="ver">SDK version</label>
+  <input id="ver" type="text" value="3.12.0" />
+
+  <button id="go">Init → register → dial</button>
+  <pre id="log"></pre>
+
+  <script>
+    var logEl = document.getElementById('log');
+    function log(m){ logEl.textContent += m + "\n"; console.log(m); }
+
+    function loadSdk(version){
+      return new Promise(function(res, rej){
+        if (window.Calling) return res();
+        var s=document.createElement('script');
+        s.src='https://unpkg.com/webex@'+version+'/umd/calling.min.js';
+        s.onload=res; s.onerror=function(){ rej(new Error('SDK '+version+' failed to load')); };
+        document.head.appendChild(s);
+      });
+    }
+
+    document.getElementById('go').onclick = async function(){
+      logEl.textContent='';
+      var access_token=document.getElementById('tok').value.trim();
+      var dest=document.getElementById('dest').value.trim();
+      var version=document.getElementById('ver').value.trim()||'3.12.0';
+      if(!access_token){ return log('Paste a token first.'); }
+      log('Loading SDK '+version+'…');
+      try { await loadSdk(version); } catch(e){ return log('FAIL: '+e.message); }
+
+      // Cisco sample config — all client features true.
+      var webexConfig={ config:{ logger:{ level:'debug' } }, credentials:{ access_token:access_token } };
+      var callingConfig={
+        clientConfig:{ calling:true, contact:true, callHistory:true, callSettings:true, voicemail:true },
+        callingClientConfig:{ logger:{ level:'info' } },
+        logger:{ level:'info' },
+      };
+      log('Calling.init…');
+      var calling = await Calling.init({ webexConfig, callingConfig });
+      calling.on('ready', function(){
+        log('ready. registering…');
+        calling.register().then(function(){
+          var cc=calling.callingClient;
+          var line=Object.values(cc.getLines())[0];
+          line.on('registered', function(){
+            log('LINE REGISTERED. Placing call to '+dest+' …');
+            var call;
+            try {
+              call = line.makeCall({ type:'tel', address: dest.indexOf('@')>-1 ? dest : dest });
+            } catch(e){ return log('makeCall threw: '+e.message); }
+            if(!call){ return log('makeCall returned NO call object (rejected).'); }
+            // Wire events
+            ['progress','alerting','connect','established','remote_media','disconnect','call_error'].forEach(function(ev){
+              try { call.on(ev, function(x){ log('call event: '+ev+' '+(x?JSON.stringify(x):'')); }); } catch(_){}
+            });
+            log('makeCall ok, callId='+(call.getCallId&&call.getCallId())+'. Dialing (mic)…');
+            Calling.createMicrophoneStream ? Calling.createMicrophoneStream({audio:true}).then(function(ms){
+              call.dial(ms);
+            }).catch(function(e){ log('mic error: '+e.message); })
+            : (navigator.mediaDevices.getUserMedia({audio:true}).then(function(){ log('(no Calling.createMicrophoneStream; check SDK)'); }));
+          });
+          line.on('error', function(e){ log('LINE ERROR: '+(e&&e.message||JSON.stringify(e))); });
+          log('line.register…');
+          line.register();
+        }).catch(function(e){ log('register FAIL: '+(e&&e.message||JSON.stringify(e))); });
+      });
+    };
+  </script>
+</body>
+</html>
