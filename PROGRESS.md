@@ -157,8 +157,12 @@ Restart protocol: new Claude Code session in this repo → kickoff prompt + "Res
       to invoke Webex APIs on behalf of another user"). Client ID received, stored in the git-ignored
       `PILOT-CONFIG.local.md` (NOT committed; goes into the Phase 7 layout JSON). Client secret held by
       Erik → Cloudflare Worker only.
-- [ ] **Gate 2 part 2 (Cloudflare Worker) — OPEN:** Erik to deploy the Worker and provide the URL
-      (→ `auth-base-url`). Still needed for the live smoke test.
+- [x] **Gate 2 part 2 (Cloudflare Worker) — DONE 2026-08-25:** deployed to
+      `https://velocity-webex-auth.blueally.workers.dev` (value in git-ignored PILOT-CONFIG.local.md).
+      Orchestrator health-checked: OPTIONS→204+scoped CORS, POST /token bogus code→400 webex_token_error
+      (proves both secrets read + Webex reachable), /refresh no-token→400. Client secret was REGENERATED
+      after an earlier mis-named-secret incident (values had been used as secret NAMES); corrected to
+      WEBEX_CLIENT_ID / WEBEX_CLIENT_SECRET. **GATE 2 COMPLETE.**
 - [ ] **Phase 2 gate (Erik) — OPEN, blocks Phase 3 (calling core needs a working token):**
       1. Create a Webex Integration at developer.webex.com/my-apps with scopes
          `spark:calls_read spark:calls_write spark:xsi spark:webrtc_calling`, redirect URI =
