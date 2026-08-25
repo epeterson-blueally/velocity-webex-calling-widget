@@ -41,7 +41,7 @@ export class DialPadView {
     this.input = document.createElement('input');
     this.input.type = 'tel';
     this.input.className = 'vw-grow';
-    this.input.placeholder = 'Enter number or address';
+    this.input.placeholder = 'Enter a phone number or extension';
     this.input.setAttribute('aria-label', 'Number to dial');
 
     this.callBtn = el('button', 'vw-primary vw-icon', 'Call');

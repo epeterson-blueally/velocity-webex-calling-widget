@@ -139,9 +139,39 @@ Restart protocol: new Claude Code session in this repo → kickoff prompt + "Res
   the Phase 3+4 live smoke test with no desktop needed. Fetch-guard hardened. tsc/lint clean, 315 tests,
   build emits all three files. NOTE: the failed pre-live subagent (session limit) left partial edits;
   kept its complete fetch-guard, reverted its broken mic edit, finished the rest here.
-- **⚠️ DEPLOY STATE:** origin/Pages is still serving the Phase-1 placeholder — commits phase-2..6 +
-  enablement are LOCAL ONLY (Erik chose manual git). Erik must `git push origin main` to deploy the real
-  widget + callback + live-test page before the live smoke test.
+- **DEPLOY STATE (2026-08-25):** Erik pushed; Pages now serves the REAL widget. Verified live:
+  velocity-webex-calling.js = 3,065,210 bytes (not the placeholder), oauth-callback.html 200,
+  live-test.html 200. Gate 2 complete + backend healthy. **READY FOR THE PHASE 3+4 LIVE SMOKE TEST**
+  via https://epeterson-blueally.github.io/velocity-webex-calling-widget/live-test.html.
+  (2 local doc-only commits not yet pushed — no effect on the deployed widget.)
+  Live smoke test needs Control Hub §7a RTMS + §7b agent Calling license/line to actually register.
+
+## Phase 3 LIVE-GATE findings (2026-08-25, from live-test.html smoke test)
+
+Sign-in + line registration WORK live (Chrome, demo.collab.user3/user4@blueally.com, Webex Calling
+Professional). Firefox is unsupported (no speaker enumeration; use Chromium). Live test surfaced 2
+real widget defects (both FIXED) + 1 SDK constraint, from the browser console log:
+- **DEFECT A — device-registration leak (FIXED):** WebexCallingBackend.dispose() nulled `this.line`
+  WITHOUT calling `line.deregister()`. Every element unmount/re-Apply orphaned a Mobius web
+  registration → console showed "User device limit exceeded" (error 101, HTTP 403) then a **429 Too
+  Many Requests** storm surfacing as stuck "reconnecting" (Erik's "have to reload the widget"). Fix:
+  dispose() now `void this.line.deregister()` best-effort before nulling. Regression test added.
+- **DEFECT B — makeCall address (FIXED):** @webex/calling 3.12.0 `line.makeCall` accepts ONLY
+  phone-number addresses (whole-string match of VALID_PHONE_REGEX /[\d\s()*#+.-]+/, always dials
+  tel:<digits>). Emails/SIP URIs → "Invalid phone number detected" + no call object → our old
+  cryptic "SDK returned no call object". The old `@`→CallType.URI branch was DEAD (SDK never honored
+  it). Fix: validate to numeric up front with a clear message ("Enter a phone number or extension…"),
+  always CallType.TEL. Dial-pad placeholder updated. Regression tests added.
+- **SDK CONSTRAINT (not a bug):** this line dials numbers/extensions only — NOT Webex email/SIP
+  addresses. For the non-PSTN 1:1 test, dial the target user's EXTENSION or directory number (from
+  Control Hub → Users → user → Calling). 319 tests total now.
+- **Operational note for Erik's next retest:** he accumulated many orphaned registrations + got
+  429-throttled before the fix. Even after redeploy, stale registrations linger (SDK "Failback
+  scheduled after 4320s" ≈ 72 min). So: wait for throttle to clear / reduce active devices (close
+  extra widget tabs; consider signing Webex App/Teams off the shared line), then ONE clean sign-in,
+  and dial an EXTENSION.
+- **NEEDS REDEPLOY:** these fixes are committed locally; must be pushed to Pages before the next
+  live retest picks them up.
 
 ## Open questions / pending gate answers
 

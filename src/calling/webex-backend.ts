@@ -42,6 +42,14 @@ import { MuteAdapter } from './mute-adapter';
 /** Factory that yields a mic stream from the SAME SDK instance as the client. */
 export type MicStreamFactory = () => Promise<LocalMicrophoneStream>;
 
+/**
+ * Anchored form of the SDK's own VALID_PHONE_REGEX (/[\d\s()*#+.-]+/): the whole
+ * address must be phone-number characters. Used to reject email/SIP input BEFORE
+ * calling the SDK, so the agent gets a clear message instead of the SDK's opaque
+ * "Invalid phone number detected".
+ */
+const VALID_PHONE_ADDRESS = /^[\d\s()*#+.-]+$/;
+
 export interface WebexCallingBackendDeps {
   /** A ready ICallingClient (its 'ready' handled by the bootstrap). */
   callingClient: ICallingClient;
@@ -117,10 +125,23 @@ export class WebexCallingBackend implements CallingBackend {
 
   makeCall(address: string): Promise<BackendCall> {
     if (!this.line) return Promise.reject(new Error('Backend not initialized.'));
-    const type = address.includes('@') ? CallType.URI : CallType.TEL;
-    const sdkCall = this.line.makeCall({ type, address });
+    // @webex/calling 3.12.0's line.makeCall accepts ONLY phone-number addresses:
+    // it whole-string matches VALID_PHONE_REGEX = /[\d\s()*#+.-]+/ and always dials
+    // tel:<digits>. Emails / SIP URIs are rejected internally with a cryptic
+    // "Invalid phone number detected" and no call object. So we validate up front and
+    // always use CallType.TEL — the old CallType.URI branch was dead (the SDK never
+    // honored it) and produced a confusing error for the agent.
+    const dest = address.trim();
+    if (dest.length === 0 || !VALID_PHONE_ADDRESS.test(dest)) {
+      return Promise.reject(
+        new Error(
+          'Enter a phone number or extension (digits and + * # ( ) . - only). This line cannot dial email or SIP addresses.',
+        ),
+      );
+    }
+    const sdkCall = this.line.makeCall({ type: CallType.TEL, address: dest });
     if (!sdkCall) {
-      return Promise.reject(new Error('SDK returned no call object for makeCall().'));
+      return Promise.reject(new Error('Webex rejected that number. Check the format and try again.'));
     }
     const wrapped = this.wrapCall(sdkCall);
     return Promise.resolve(wrapped);
@@ -143,6 +164,19 @@ export class WebexCallingBackend implements CallingBackend {
     for (const call of this.calls.values()) call.teardown();
     this.calls.clear();
     this.listeners.clear();
+    // Deregister the Mobius device on teardown. Without this, every element
+    // unmount/remount (re-Apply on the test page, desktop re-navigation, tab
+    // reload) orphaned a live web registration server-side, which accumulates into
+    // "User device limit exceeded" (Mobius error 101) and then 429 throttling that
+    // surfaces as a stuck "reconnecting" state. Best-effort + fire-and-forget: we
+    // are tearing down regardless of whether the deregister request completes.
+    if (this.line) {
+      try {
+        void this.line.deregister();
+      } catch {
+        // ignore — teardown proceeds
+      }
+    }
     this.line = null;
   }
 
