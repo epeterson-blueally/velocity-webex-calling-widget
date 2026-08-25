@@ -170,8 +170,9 @@ real widget defects (both FIXED) + 1 SDK constraint, from the browser console lo
   scheduled after 4320s" ≈ 72 min). So: wait for throttle to clear / reduce active devices (close
   extra widget tabs; consider signing Webex App/Teams off the shared line), then ONE clean sign-in,
   and dial an EXTENSION.
-- **NEEDS REDEPLOY:** these fixes are committed locally; must be pushed to Pages before the next
-  live retest picks them up.
+- **DEPLOYED 2026-08-25:** fix commit 536b305 pushed; Pages build green; live bundle verified to
+  contain the new numeric-dial validation. Ready for retest after the throttle/device-limit clears
+  (~20–30 min). Retest: fresh sign-in as demo3 → dial demo4's EXTENSION (digits).
 
 ## Open questions / pending gate answers
 
