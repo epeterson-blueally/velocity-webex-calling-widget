@@ -8,6 +8,8 @@ dist/
 .dev.vars
 **/.dev.vars
 .wrangler/
+# Pilot config (client id / worker url / tenant values) — kept out of git; goes in the layout JSON at Phase 7
+PILOT-CONFIG.local.md
 coverage/
 # cloned Cisco samples live under /reference (~249M); NOT committed per BUILD-PLAN §1
 # ("git-ignored or submodule-less copies"). The durable extracted patterns live in DISCOVERY.md.

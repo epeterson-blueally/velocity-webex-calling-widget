@@ -153,6 +153,12 @@ Restart protocol: new Claude Code session in this repo → kickoff prompt + "Res
          `Non-Contact Center Call` idle code existence + ID, ACD endpoint type (WebRTC vs extension).
 - [ ] Empirical (deferred to Phase 3 live test): `ICall.mute()` twice — toggle or idempotent?
       No `unmute()` in typings; confirm against a live call.
+- [x] **Gate 2 part 1 (Webex Integration) — DONE 2026-08-22:** Integration created ("Request OAuth
+      to invoke Webex APIs on behalf of another user"). Client ID received, stored in the git-ignored
+      `PILOT-CONFIG.local.md` (NOT committed; goes into the Phase 7 layout JSON). Client secret held by
+      Erik → Cloudflare Worker only.
+- [ ] **Gate 2 part 2 (Cloudflare Worker) — OPEN:** Erik to deploy the Worker and provide the URL
+      (→ `auth-base-url`). Still needed for the live smoke test.
 - [ ] **Phase 2 gate (Erik) — OPEN, blocks Phase 3 (calling core needs a working token):**
       1. Create a Webex Integration at developer.webex.com/my-apps with scopes
          `spark:calls_read spark:calls_write spark:xsi spark:webrtc_calling`, redirect URI =
