@@ -51,6 +51,9 @@
     <label for="redirectUri">Redirect URI (must match the Integration's registered value)</label>
     <input id="redirectUri" type="text" autocomplete="off" />
 
+    <label for="sdkVersion">Webex calling SDK version (CDN) — for A/B testing SDP issues</label>
+    <input id="sdkVersion" type="text" value="3.12.0" autocomplete="off" />
+
     <div class="row" style="margin-top:0.75rem">
       <button id="apply">Apply / (re)load widget</button>
       <label class="row" style="font-weight:400"><input id="dark" type="checkbox" /> dark mode</label>
@@ -60,9 +63,8 @@
 
   <div id="host"></div>
 
-  <!-- Calling SDK from CDN (provides globalThis.Calling for src/calling/bootstrap.ts). -->
-  <script src="https://unpkg.com/webex@3.12.0/umd/calling.min.js"></script>
-  <!-- The real widget bundle, served from this same Pages directory. -->
+  <!-- The Webex calling SDK is loaded dynamically on Apply so the version is selectable.
+       The widget bundle (defines the element; reads globalThis.Calling at init time). -->
   <script src="./velocity-webex-calling.js"></script>
   <script>
     (function () {
@@ -70,20 +72,45 @@
       var statusEl = document.getElementById('status');
       var redirectDefault = window.location.origin + '/velocity-webex-calling-widget/oauth-callback.html';
       document.getElementById('redirectUri').value = redirectDefault;
+      var loadedSdkVersion = null;
 
-      if (!window.Calling) {
-        statusEl.textContent = 'WARNING: the Webex calling SDK (CDN) did not load — check network/CSP.';
+      // Load (once) the chosen webex UMD calling SDK, then resolve. Re-selecting a
+      // different version requires a full page reload (the SDK global can't be swapped
+      // in place) — we warn if that's attempted.
+      function ensureSdk(version) {
+        return new Promise(function (resolve, reject) {
+          if (window.Calling && loadedSdkVersion === version) return resolve();
+          if (window.Calling && loadedSdkVersion && loadedSdkVersion !== version) {
+            return reject(new Error('SDK ' + loadedSdkVersion + ' already loaded — RELOAD the page to try ' + version + '.'));
+          }
+          var s = document.createElement('script');
+          s.src = 'https://unpkg.com/webex@' + version + '/umd/calling.min.js';
+          s.onload = function () { loadedSdkVersion = version; resolve(); };
+          s.onerror = function () { reject(new Error('Failed to load Webex SDK ' + version + ' from CDN.')); };
+          document.head.appendChild(s);
+        });
       }
 
       document.getElementById('apply').onclick = function () {
         var clientId = document.getElementById('clientId').value.trim();
         var authBaseUrl = document.getElementById('authBaseUrl').value.trim().replace(/\/+$/, '');
         var redirectUri = document.getElementById('redirectUri').value.trim();
+        var sdkVersion = document.getElementById('sdkVersion').value.trim() || '3.12.0';
         var dark = document.getElementById('dark').checked;
         if (!clientId || !authBaseUrl) {
           statusEl.textContent = 'Enter both the Client ID and the Worker base URL first.';
           return;
         }
+        statusEl.textContent = 'Loading Webex SDK ' + sdkVersion + '…';
+        ensureSdk(sdkVersion).then(function () {
+          statusEl.textContent = 'SDK ' + sdkVersion + ' loaded. Sign in inside the widget.';
+          mountWidget(clientId, authBaseUrl, redirectUri, dark);
+        }).catch(function (err) {
+          statusEl.textContent = 'ERROR: ' + err.message;
+        });
+      };
+
+      function mountWidget(clientId, authBaseUrl, redirectUri, dark) {
         // Recreate the element fresh each Apply so config changes take effect cleanly.
         host.textContent = '';
         var el = document.createElement('velocity-webex-calling');

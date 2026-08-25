@@ -174,6 +174,25 @@ real widget defects (both FIXED) + 1 SDK constraint, from the browser console lo
   contain the new numeric-dial validation. Ready for retest after the throttle/device-limit clears
   (~20–30 min). Retest: fresh sign-in as demo3 → dial demo4's EXTENSION (digits).
 
+## Phase 3 LIVE-GATE — OUTBOUND CALL BLOCKER (2026-08-25, under investigation)
+
+Registration works; the deregister/dial fixes deployed. But **every outbound call fails**: the widget
+builds the call + a valid SDP offer and POSTs to Mobius, which returns **HTTP 400 "Invalid format.
+Please check the request."** (`POST …/devices/{id}/call`; trackingId in the HAR). Same for a bare
+extension (`tel:5437`) AND full E.164 (`tel:+14047265437`) — so NOT the dialed number.
+- **ROOT CAUSE (strong):** the SDP the SDK sends has **bare LF line endings, zero CRLF** (verified in the
+  HAR request body — HAR preserves CRLF elsewhere, 114 `\r\n`, but the /call SDP is `v=0\no=-…`). SDP
+  (RFC 4566) requires CRLF; Mobius rejects LF-only SDP as "Invalid format." Our widget never touches the
+  SDP — the SDK (@webex/calling / webex monolith 3.12.0, loaded from CDN on the test page) generates and
+  sends it. So this is in the SDK's media/SDP path, likely a **3.12.0 regression** (SDP munging dropping
+  CRLF). Teams works because it's a different native stack.
+- **NEXT TEST:** live-test.html now has a selectable **SDK version** field (loads webex@<ver> UMD from
+  CDN on Apply). A/B a different version (e.g. 2.59.8-next.10 — the version Cisco's own sample pins) to
+  see if the SDP comes out CRLF and the call connects. If an older version works → 3.12.0 has the bug and
+  we re-pin the widget's SDK to a known-good version. If all versions fail → account/org or Mobius issue
+  → escalate to Cisco with the trackingId.
+- This is a Webex-SDK problem, not widget logic. Blocks the outbound-call acceptance criterion only.
+
 ## Open questions / pending gate answers
 
 - [ ] **Phase 0 gate (Erik) — OPEN, blocks Phase 1 start.** Two parts:
